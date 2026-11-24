@@ -1,5 +1,14 @@
 # 更新日志
 
+## [1.0.5] - 2026-11-24
+
+### 修复
+
+- 二次修复 ARM 设备安装被拒：按飞牛官方文档与已可安装的参考包对齐包结构。
+  - manifest 补充兼容性字段 `os_min_version = 1.0.0` 与 `checkport = false`（官方定义为兼容性检查字段，缺失会被判不符合系统要求）。
+  - `config/resource` 改为官方模板格式：两个 share 仅声明 `name`，去掉上版误加的 `permission` 字段。
+  - `wizard/` 补齐 `install` / `upgrade` / `uninstall` / `config` 四个文件（上版只有空的 `install`）。
+
 ## [1.0.4] - 2026-11-24
 
 ### 修复
