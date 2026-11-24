@@ -656,6 +656,32 @@
 </div>
 
 <script>
+// Optional shared secret: supply it once via ?_aurora_token=... and reuse it
+// for API calls, the lite proxy and the Wisp transport.
+(function cacheAuroraToken() {
+  try {
+    const fromUrl = new URLSearchParams(location.search).get('_aurora_token');
+    if (fromUrl) sessionStorage.setItem('auroraToken', fromUrl);
+  } catch (e) {}
+})();
+
+function authHeaders(extra = {}) {
+  const token = sessionStorage.getItem('auroraToken');
+  return token ? { ...extra, 'X-Aurora-Token': token } : extra;
+}
+
+function withToken(raw) {
+  const token = sessionStorage.getItem('auroraToken');
+  if (!token) return raw;
+  try {
+    const url = new URL(raw, location.href);
+    url.searchParams.set('_aurora_token', token);
+    return url.toString();
+  } catch (e) {
+    return raw;
+  }
+}
+
 const SEARCH_ENGINES = {
   bing: { name: '必应', url: 'https://cn.bing.com/search?q=' },
   baidu: { name: '百度', url: 'https://www.baidu.com/s?wd=' },
@@ -704,7 +730,7 @@ function resolveUserInput(raw) {
 
 // 构造轻量代理访问地址（内网设备与 Scramjet 不可用时的回退路径）
 async function buildProxySrc(targetUrl) {
-  return `/lite-proxy/${toBase64Url(targetUrl)}`;
+  return withToken(`/lite-proxy/${toBase64Url(targetUrl)}`);
 }
 
 // 判断是否为内网地址（内网设备始终走轻量直连，Scramjet 的 Wisp 服务端默认也拒绝私网目标）
@@ -768,7 +794,8 @@ async function bootScramjet() {
 
     const { default: EpoxyTransport } = await import('/epoxy/index.mjs');
     const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const transport = new EpoxyTransport({ wisp: `${scheme}//${location.host}/wisp/` });
+    const wispUrl = withToken(`${scheme}//${location.host}/wisp/`);
+    const transport = new EpoxyTransport({ wisp: wispUrl });
 
     const controller = new $scramjetController.Controller({
       serviceworker,
@@ -811,6 +838,14 @@ function onScramjetUrlChange(tabId, url) {
   const isProgrammatic = tab.sjExpectUrl === url;
   tab.sjExpectUrl = null;
   if (tab.url === url) return;
+
+  // In-page clicks must become real history entries, otherwise back/forward
+  // jumps to the last manually typed URL instead of the previous page.
+  if (!isProgrammatic) {
+    tab.history = tab.history.slice(0, tab.historyIndex + 1);
+    tab.history.push(url);
+    tab.historyIndex = tab.history.length - 1;
+  }
   tab.url = url;
   try {
     tab.title = new URL(url).hostname;
@@ -820,7 +855,7 @@ function onScramjetUrlChange(tabId, url) {
   if (!isProgrammatic) {
     fetch('/api/history', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ title: tab.title, url })
     }).catch(() => {});
   }
@@ -952,7 +987,7 @@ async function navigateTab(id, rawInput, skipHistoryPush = false) {
     // 内网设备 / Scramjet 未就绪：走内置轻量直连代理
     tab.sjFrame = null;
     const proxySrc = await buildProxySrc(targetUrl);
-    pane.innerHTML = `<iframe class="proxy-frame" id="frame-${id}" src="${proxySrc}"></iframe>`;
+    pane.innerHTML = `<iframe class="proxy-frame" id="frame-${id}" name="aurora-${id}" src="${proxySrc}"></iframe>`;
     const frame = document.getElementById(`frame-${id}`);
     frame.addEventListener('load', () => {
       showLoading(false);
@@ -969,7 +1004,7 @@ async function navigateTab(id, rawInput, skipHistoryPush = false) {
   // 记录历史
   fetch('/api/history', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ title: tab.title, url: targetUrl })
   }).catch(() => {});
 }
@@ -1113,7 +1148,7 @@ function renderNewTabPage(pane, tabId) {
     state.settings.searchEngine = e.target.value;
     await fetch('/api/settings', {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
       body: JSON.stringify({ searchEngine: e.target.value })
     });
   };
@@ -1134,7 +1169,7 @@ function renderNewTabPage(pane, tabId) {
     btn.onclick = async (e) => {
       e.stopPropagation();
       const bmId = btn.getAttribute('data-id');
-      await fetch(`/api/bookmarks/${encodeURIComponent(bmId)}`, { method: 'DELETE' });
+      await fetch(`/api/bookmarks/${encodeURIComponent(bmId)}`, { method: 'DELETE', headers: authHeaders() });
       await loadBookmarks();
       renderNewTabPage(pane, tabId);
     };
@@ -1157,7 +1192,7 @@ function escapeHtml(str) {
 // 书签与历史交互
 // ---------------------------------------------------------------------------
 async function loadBookmarks() {
-  const resp = await fetch('/api/bookmarks');
+  const resp = await fetch('/api/bookmarks', { headers: authHeaders() });
   state.bookmarks = await resp.json();
   renderBookmarkBar();
   syncToolbarWithActiveTab();
@@ -1185,7 +1220,7 @@ document.getElementById('saveBmBtn').onclick = async () => {
 
   await fetch('/api/bookmarks', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ title: title || url, url, category, color })
   });
   document.getElementById('bookmarkModal').classList.remove('open');
@@ -1201,7 +1236,7 @@ document.getElementById('starBtn').onclick = async () => {
   if (!tab || tab.url === 'fn://newtab') return;
   const existing = state.bookmarks.find((b) => b.url === tab.url);
   if (existing) {
-    await fetch(`/api/bookmarks/${encodeURIComponent(existing.id)}`, { method: 'DELETE' });
+    await fetch(`/api/bookmarks/${encodeURIComponent(existing.id)}`, { method: 'DELETE', headers: authHeaders() });
     await loadBookmarks();
   } else {
     openBookmarkModal(tab.title, tab.url);
@@ -1210,7 +1245,7 @@ document.getElementById('starBtn').onclick = async () => {
 
 // 历史记录弹窗
 document.getElementById('historyBtn').onclick = async () => {
-  const resp = await fetch('/api/history');
+  const resp = await fetch('/api/history', { headers: authHeaders() });
   const list = await resp.json();
   const container = document.getElementById('historyList');
   if (!list.length) {
@@ -1241,7 +1276,7 @@ document.getElementById('closeHistoryModal').onclick = () => {
 };
 
 document.getElementById('clearHistoryBtn').onclick = async () => {
-  await fetch('/api/history', { method: 'DELETE' });
+  await fetch('/api/history', { method: 'DELETE', headers: authHeaders() });
   document.getElementById('historyList').innerHTML =
     '<p style="color:var(--text-muted);padding:16px 0;text-align:center;">已清空浏览记录</p>';
 };
@@ -1291,19 +1326,28 @@ document.getElementById('themeBtn').onclick = async () => {
   applyTheme(next);
   await fetch('/api/settings', {
     method: 'PUT',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ theme: next })
   });
 };
 
 // 监听 iframe 内部发送的导航同步事件
 window.addEventListener('message', (event) => {
-  if (event.data && event.data.type === 'fn-browser-nav') {
-    const tab = getActiveTab();
-    if (tab && event.data.title) {
-      tab.title = event.data.title;
-      renderTabStrip();
-    }
+  if (!event.data || event.data.type !== 'fn-browser-nav') return;
+  const tab = (event.data.tabId && state.tabs.find((t) => t.id === event.data.tabId)) || getActiveTab();
+  if (!tab) return;
+  let urlChanged = false;
+  if (event.data.url && /^https?:\/\//i.test(event.data.url) && event.data.url !== tab.url) {
+    tab.url = event.data.url;
+    tab.history = tab.history.slice(0, tab.historyIndex + 1);
+    tab.history.push(tab.url);
+    tab.historyIndex = tab.history.length - 1;
+    urlChanged = true;
+  }
+  if (event.data.title) tab.title = event.data.title;
+  if (urlChanged || event.data.title) {
+    renderTabStrip();
+    syncToolbarWithActiveTab();
   }
 });
 
@@ -1324,8 +1368,8 @@ window.addEventListener('keydown', (e) => {
 (async function init() {
   try {
     const [statusResp, settingsResp] = await Promise.all([
-      fetch('/api/status'),
-      fetch('/api/settings')
+      fetch('/api/status', { headers: authHeaders() }),
+      fetch('/api/settings', { headers: authHeaders() })
     ]);
     const status = await statusResp.json();
     state.engineMode = status.engine || 'lite';

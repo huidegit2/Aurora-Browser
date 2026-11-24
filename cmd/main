@@ -64,6 +64,7 @@ start_app() {
     DATA_DIR="$DATA_DIR" \
     CACHE_DIR="$VAR_DIR/sessions" \
     WWW_DIR="$APP_DIR/www" \
+    AUTH_TOKEN="${AUTH_TOKEN:-}" \
     NODE_ENV=production \
     nohup "$NODE_BIN" "$APP_DIR/server/index.js" >> "$LOG_FILE" 2>&1 < /dev/null &
 
