@@ -1,0 +1,75 @@
+name: Build and Release FPK
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "版本号（例如 1.0.3）"
+        required: true
+        type: string
+      dry_run:
+        description: "只构建验证，不创建 Release"
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+concurrency:
+  group: fpk-release
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Resolve version
+        id: ver
+        run: |
+          if [ -n "${{ github.event.inputs.version }}" ]; then
+            VERSION="${{ github.event.inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Building version $VERSION"
+
+      - name: Build arm64 FPK
+        run: VERSION="${{ steps.ver.outputs.version }}" ./build.sh arm
+
+      - name: Build x86_64 FPK
+        run: VERSION="${{ steps.ver.outputs.version }}" ./build.sh x86
+
+      - name: Verify artifacts
+        run: |
+          ls -lh dist/
+          test -s dist/fn-browser-arm64.fpk
+          test -s dist/fn-browser-x86_64.fpk
+
+      - name: Generate release notes
+        run: python3 scripts/extract_changelog.py "${{ steps.ver.outputs.version }}" > RELEASE_NOTES.md
+
+      - name: Publish GitHub Release
+        if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "v${{ steps.ver.outputs.version }}" \
+            --title "极光 Aurora v${{ steps.ver.outputs.version }}" \
+            --notes-file RELEASE_NOTES.md \
+            dist/fn-browser-arm64.fpk \
+            dist/fn-browser-x86_64.fpk

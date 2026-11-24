@@ -5,6 +5,32 @@ const path = require('path');
 const zlib = require('zlib');
 const { URL } = require('url');
 
+// Version comes from the package manifest so it never drifts from the FPK.
+const APP_VERSION = (() => {
+    try {
+        const manifest = fs.readFileSync(path.resolve(__dirname, '../../manifest'), 'utf8');
+        const line = manifest.split(/\r?\n/).find((l) => /^version\s*=/.test(l));
+        return line ? line.split('=')[1].trim() : '1.0.2';
+    } catch {
+        return '1.0.2';
+    }
+})();
+
+// Optional shared secret. When set, the API, the lite proxy and the Wisp
+// upgrade endpoint all require it. The shell page stays public so the token
+// can be supplied once via ?_aurora_token=... and cached in sessionStorage.
+const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
+const TOKEN_PARAM = '_aurora_token';
+
+function isAuthorized(req, parsedUrl) {
+    if (!AUTH_TOKEN) return true;
+    const headerToken = req.headers['x-aurora-token'];
+    const queryToken = parsedUrl && parsedUrl.searchParams
+        ? parsedUrl.searchParams.get(TOKEN_PARAM)
+        : null;
+    return headerToken === AUTH_TOKEN || queryToken === AUTH_TOKEN;
+}
+
 const PORT = parseInt(process.env.PORT || '18920', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 const WWW_DIR = process.env.WWW_DIR || path.resolve(__dirname, '../www');
@@ -175,6 +201,18 @@ function decodeLiteTarget(encoded) {
     return Buffer.from(encoded, 'base64url').toString('utf8');
 }
 
+function stripTokenFromSearch(search) {
+    if (!search) return '';
+    try {
+        const params = new URLSearchParams(search);
+        params.delete(TOKEN_PARAM);
+        const rest = params.toString();
+        return rest ? `?${rest}` : '';
+    } catch {
+        return '';
+    }
+}
+
 function rewriteHtmlForLiteProxy(html, baseUrl) {
     const base = new URL(baseUrl);
     const wrapUrl = (raw) => {
@@ -194,17 +232,20 @@ function rewriteHtmlForLiteProxy(html, baseUrl) {
 <script>
 (function() {
   try {
+    var tabId = (window.name || '').replace(/^aurora-/, '');
     window.parent.postMessage({
       type: 'fn-browser-nav',
+      tabId: tabId,
       url: ${JSON.stringify(baseUrl)},
       title: document.title || ${JSON.stringify(base.hostname)}
-    }, '*');
+    }, window.location.origin);
     window.addEventListener('load', function() {
       window.parent.postMessage({
         type: 'fn-browser-nav',
+        tabId: tabId,
         url: ${JSON.stringify(baseUrl)},
         title: document.title || ${JSON.stringify(base.hostname)}
-      }, '*');
+      }, window.location.origin);
     });
   } catch (e) {}
 })();
@@ -230,8 +271,9 @@ function handleLiteProxy(req, res, encodedPart, extraSearch) {
     let targetUrl;
     try {
         targetUrl = decodeLiteTarget(encodedPart);
-        if (extraSearch && !targetUrl.includes('?')) {
-            targetUrl += extraSearch;
+        const cleanSearch = stripTokenFromSearch(extraSearch);
+        if (cleanSearch && !targetUrl.includes('?')) {
+            targetUrl += cleanSearch;
         }
     } catch {
         res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
@@ -245,11 +287,21 @@ function handleLiteProxy(req, res, encodedPart, extraSearch) {
         res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
         return res.end('Malformed target URL');
     }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+        return res.end('Unsupported target protocol');
+    }
 
     const client = parsed.protocol === 'https:' ? https : http;
     const headers = { ...req.headers };
     delete headers.host;
     delete headers['accept-encoding'];
+    // Never forward the caller's credentials to an arbitrary target site.
+    delete headers.cookie;
+    delete headers.authorization;
+    delete headers['proxy-authorization'];
+    delete headers[TOKEN_PARAM];
+    delete headers['x-aurora-token'];
     headers['host'] = parsed.host;
     headers['user-agent'] = headers['user-agent'] || 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36';
 
@@ -309,10 +361,10 @@ function handleLiteProxy(req, res, encodedPart, extraSearch) {
         }
     });
 
-    proxyReq.on('error', (err) => {
+    proxyReq.on('error', () => {
         if (!res.headersSent) {
             res.writeHead(502, { 'Content-Type': 'text/html; charset=utf-8' });
-            res.end(`<h3>连接目标站点失败</h3><p>${parsed.toString()}</p><pre>${err.message}</pre>`);
+            res.end('<h3>连接目标站点失败</h3><p>请检查目标地址是否可达，或目标站点是否拒绝代理访问。</p>');
         }
     });
 
@@ -358,13 +410,17 @@ function parseBody(req) {
     });
 }
 
-async function handleApi(req, res, pathname) {
+async function handleApi(req, res, pathname, parsedUrl) {
+    if (!isAuthorized(req, parsedUrl)) {
+        return sendJson(res, 401, { error: 'Unauthorized' });
+    }
+
     // 系统状态与内核信息
     if (pathname === '/api/status' && req.method === 'GET') {
         return sendJson(res, 200, {
             ok: true,
             engine: engineMode,
-            version: '1.0.2',
+            version: APP_VERSION,
             uptime: Math.floor(process.uptime()),
             memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024)
         });
@@ -496,13 +552,17 @@ const server = http.createServer(async (req, res) => {
 
         // 内置轻量代理路由
         if (pathname.startsWith('/lite-proxy/')) {
+            if (!isAuthorized(req, parsedUrl)) {
+                res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
+                return res.end('Unauthorized');
+            }
             const encoded = pathname.slice('/lite-proxy/'.length);
             return handleLiteProxy(req, res, encoded, parsedUrl.search);
         }
 
         // REST API 路由
         if (pathname.startsWith('/api/')) {
-            return await handleApi(req, res, pathname);
+            return await handleApi(req, res, pathname, parsedUrl);
         }
 
         // 浏览器外壳静态资源
@@ -519,9 +579,12 @@ const server = http.createServer(async (req, res) => {
 // WebSocket 升级入口：/wisp/ 交给 Wisp 服务端（Scramjet 的出站传输通道）
 server.on('upgrade', (req, socket, head) => {
     try {
-        const pathname = new URL(req.url || '/', 'http://localhost').pathname;
-        if (pathname === '/wisp/' && wispRouteRequest) {
-            req.url = pathname;
+        const parsed = new URL(req.url || '/', 'http://localhost');
+        if (parsed.pathname === '/wisp/' && wispRouteRequest) {
+            if (!isAuthorized(req, parsed)) {
+                return socket.destroy();
+            }
+            req.url = parsed.pathname;
             return wispRouteRequest(req, socket, head);
         }
     } catch (err) {

@@ -1,11 +1,13 @@
 appname               = fn-browser
-version               = 1.0.2
+version               = 1.0.3
 display_name          = 极光
-desc                  = 极光 Aurora · 纯原生轻量级网页代理浏览器（ARM64 专用版），支持多标签页、内网设备快捷访问与会话隔离（无需 Docker 与 VNC）
+desc                  = 极光 Aurora · 飞牛 fnOS 原生网页代理浏览器，支持多标签页、书签/历史与内网设备快捷访问；提供 ARM64 与 x86_64 双架构包。
 platform              = arm
 source                = thirdparty
-maintainer            = fn-browser-community
+maintainer            = huidegit2
+maintainer_url        = https://github.com/huidegit2/Aurora-Browser
 distributor           = community
+ctl_stop              = true
 desktop_uidir         = ui
 desktop_applaunchname = fn-browser.Application
 service_port          = 18920
