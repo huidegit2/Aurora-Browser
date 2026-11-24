@@ -1,0 +1,12 @@
+appname               = fn-browser
+version               = 1.0.2
+display_name          = 极光
+desc                  = 极光 Aurora · 纯原生轻量级网页代理浏览器（ARM64 专用版），支持多标签页、内网设备快捷访问与会话隔离（无需 Docker 与 VNC）
+platform              = arm
+source                = thirdparty
+maintainer            = fn-browser-community
+distributor           = community
+desktop_uidir         = ui
+desktop_applaunchname = fn-browser.Application
+service_port          = 18920
+checkport             = false

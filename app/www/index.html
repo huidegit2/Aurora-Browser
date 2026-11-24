@@ -1,0 +1,1350 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>极光</title>
+<style>
+  :root {
+    --bg-shell: #eef1f6;
+    --bg-toolbar: #ffffff;
+    --bg-tab: #e2e7f0;
+    --bg-tab-hover: #d6dde9;
+    --bg-tab-active: #ffffff;
+    --bg-input: #f2f4f8;
+    --bg-input-focus: #ffffff;
+    --bg-card: #ffffff;
+    --text-primary: #1d2129;
+    --text-secondary: #4e5969;
+    --text-muted: #86909c;
+    --border-color: #e5e6eb;
+    --accent: #165dff;
+    --accent-hover: #4080ff;
+    --danger: #f53f3f;
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.06);
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.12);
+  }
+
+  [data-theme="dark"] {
+    --bg-shell: #14161a;
+    --bg-toolbar: #1e2128;
+    --bg-tab: #17191f;
+    --bg-tab-hover: #252932;
+    --bg-tab-active: #1e2128;
+    --bg-input: #282c35;
+    --bg-input-focus: #14161a;
+    --bg-card: #1e2128;
+    --text-primary: #f2f3f5;
+    --text-secondary: #c9cdd4;
+    --text-muted: #86909c;
+    --border-color: #2e323b;
+    --accent: #3c7eff;
+    --accent-hover: #5791ff;
+    --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.28);
+    --shadow-md: 0 8px 24px rgba(0, 0, 0, 0.45);
+  }
+
+  * {
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+  }
+
+  html, body {
+    width: 100%;
+    height: 100%;
+    overflow: hidden;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    background: var(--bg-shell);
+    color: var(--text-primary);
+    user-select: none;
+  }
+
+  .browser-app {
+    display: flex;
+    flex-direction: column;
+    width: 100%;
+    height: 100%;
+  }
+
+  /* 标签栏 */
+  .tab-strip {
+    display: flex;
+    align-items: flex-end;
+    height: 38px;
+    padding: 6px 10px 0 10px;
+    background: var(--bg-shell);
+    gap: 4px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tab-strip::-webkit-scrollbar { display: none; }
+
+  .tab-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 120px;
+    max-width: 220px;
+    height: 32px;
+    padding: 0 10px;
+    border-radius: 8px 8px 0 0;
+    background: var(--bg-tab);
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    cursor: pointer;
+    transition: background 0.15s, color 0.15s;
+    position: relative;
+    flex-shrink: 0;
+  }
+  .tab-item:hover {
+    background: var(--bg-tab-hover);
+  }
+  .tab-item.active {
+    background: var(--bg-tab-active);
+    color: var(--text-primary);
+    font-weight: 500;
+  }
+
+  .tab-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    flex-shrink: 0;
+  }
+
+  .tab-title {
+    flex: 1;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .tab-close {
+    width: 18px;
+    height: 18px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 13px;
+    cursor: pointer;
+  }
+  .tab-close:hover {
+    background: rgba(128, 128, 128, 0.2);
+    color: var(--text-primary);
+  }
+
+  .new-tab-btn {
+    width: 28px;
+    height: 28px;
+    margin-bottom: 2px;
+    border: none;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 18px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .new-tab-btn:hover {
+    background: var(--bg-tab-hover);
+    color: var(--text-primary);
+  }
+
+  /* 导航工具栏 */
+  .nav-bar {
+    display: flex;
+    align-items: center;
+    height: 46px;
+    padding: 0 12px;
+    background: var(--bg-toolbar);
+    border-bottom: 1px solid var(--border-color);
+    gap: 8px;
+    position: relative;
+  }
+
+  .nav-btn {
+    width: 32px;
+    height: 32px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 15px;
+    transition: background 0.15s;
+    flex-shrink: 0;
+  }
+  .nav-btn:hover:not(:disabled) {
+    background: var(--bg-input);
+    color: var(--text-primary);
+  }
+  .nav-btn:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+  }
+
+  .omnibox {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    height: 34px;
+    padding: 0 12px;
+    border-radius: 17px;
+    background: var(--bg-input);
+    border: 1.5px solid transparent;
+    transition: all 0.15s;
+    gap: 8px;
+  }
+  .omnibox:focus-within {
+    background: var(--bg-input-focus);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px rgba(22, 93, 255, 0.15);
+  }
+
+  .engine-badge {
+    font-size: 11px;
+    padding: 2px 7px;
+    border-radius: 10px;
+    background: rgba(22, 93, 255, 0.12);
+    color: var(--accent);
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+  }
+
+  .url-input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 13.5px;
+    width: 100%;
+  }
+
+  .star-btn {
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 16px;
+    cursor: pointer;
+    padding: 2px 4px;
+  }
+  .star-btn.starred {
+    color: #ff9a2e;
+  }
+
+  /* 顶部加载进度条 */
+  .loading-bar {
+    position: absolute;
+    left: 0;
+    bottom: 0;
+    height: 2px;
+    background: var(--accent);
+    width: 0%;
+    opacity: 0;
+    transition: width 0.3s ease, opacity 0.2s;
+  }
+  .loading-bar.active {
+    opacity: 1;
+    width: 85%;
+  }
+
+  /* 书签快捷栏 */
+  .bookmark-bar {
+    display: flex;
+    align-items: center;
+    height: 32px;
+    padding: 0 14px;
+    background: var(--bg-toolbar);
+    border-bottom: 1px solid var(--border-color);
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .bookmark-bar::-webkit-scrollbar { display: none; }
+
+  .bm-chip {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: background 0.15s;
+  }
+  .bm-chip:hover {
+    background: var(--bg-input);
+    color: var(--text-primary);
+  }
+  .bm-dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+  }
+
+  /* 主内容视口 */
+  .viewport-container {
+    flex: 1;
+    position: relative;
+    background: var(--bg-shell);
+    overflow: hidden;
+  }
+
+  .tab-pane {
+    position: absolute;
+    inset: 0;
+    display: none;
+    width: 100%;
+    height: 100%;
+  }
+  .tab-pane.active {
+    display: block;
+  }
+
+  .proxy-frame {
+    width: 100%;
+    height: 100%;
+    border: none;
+    background: #ffffff;
+  }
+
+  /* 新标签页（起始页） */
+  .newtab-page {
+    width: 100%;
+    height: 100%;
+    overflow-y: auto;
+    padding: 42px 24px 60px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+  }
+
+  .hero-header {
+    text-align: center;
+    margin-bottom: 28px;
+  }
+  .hero-clock {
+    font-size: 44px;
+    font-weight: 700;
+    letter-spacing: -1px;
+    color: var(--text-primary);
+  }
+  .hero-sub {
+    margin-top: 6px;
+    font-size: 13.5px;
+    color: var(--text-muted);
+  }
+
+  .hero-search {
+    width: 100%;
+    max-width: 620px;
+    display: flex;
+    align-items: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 26px;
+    padding: 6px 8px 6px 18px;
+    box-shadow: var(--shadow-sm);
+    margin-bottom: 36px;
+    gap: 10px;
+  }
+  .hero-search select {
+    border: none;
+    background: transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 600;
+    outline: none;
+    cursor: pointer;
+  }
+  .hero-search input {
+    flex: 1;
+    border: none;
+    outline: none;
+    background: transparent;
+    color: var(--text-primary);
+    font-size: 15px;
+    height: 36px;
+  }
+  .hero-search button {
+    height: 36px;
+    padding: 0 20px;
+    border: none;
+    border-radius: 18px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 14px;
+    font-weight: 500;
+    cursor: pointer;
+  }
+  .hero-search button:hover {
+    background: var(--accent-hover);
+  }
+
+  .section-box {
+    width: 100%;
+    max-width: 860px;
+    margin-bottom: 28px;
+  }
+  .section-title {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    margin-bottom: 12px;
+    padding: 0 4px;
+  }
+  .add-bm-link {
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 12.5px;
+  }
+
+  .cards-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(175px, 1fr));
+    gap: 12px;
+  }
+
+  .site-card {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 14px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    cursor: pointer;
+    transition: transform 0.15s, box-shadow 0.15s;
+    position: relative;
+  }
+  .site-card:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--shadow-sm);
+  }
+  .site-avatar {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    color: #fff;
+    font-weight: 700;
+    font-size: 15px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+  }
+  .site-meta {
+    flex: 1;
+    min-width: 0;
+  }
+  .site-name {
+    font-size: 13.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .site-url {
+    font-size: 11.5px;
+    color: var(--text-muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    margin-top: 2px;
+  }
+  .site-del {
+    opacity: 0;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 14px;
+    padding: 2px 5px;
+  }
+  .site-card:hover .site-del {
+    opacity: 1;
+  }
+  .site-del:hover {
+    color: var(--danger);
+  }
+
+  /* 弹窗 & 抽屉 */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+  }
+  .modal-backdrop.open {
+    display: flex;
+  }
+  .modal-card {
+    width: 92%;
+    max-width: 420px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: var(--shadow-md);
+  }
+  .modal-card h3 {
+    font-size: 16px;
+    margin-bottom: 14px;
+  }
+  .form-group {
+    margin-bottom: 12px;
+  }
+  .form-group label {
+    display: block;
+    font-size: 12px;
+    color: var(--text-secondary);
+    margin-bottom: 5px;
+  }
+  .form-group input, .form-group select {
+    width: 100%;
+    height: 36px;
+    padding: 0 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    outline: none;
+  }
+  .modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+    margin-top: 16px;
+  }
+  .btn {
+    height: 34px;
+    padding: 0 14px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background: var(--bg-input);
+    color: var(--text-primary);
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+
+  .history-list {
+    max-height: 320px;
+    overflow-y: auto;
+    margin-top: 8px;
+  }
+  .history-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 8px 6px;
+    border-bottom: 1px solid var(--border-color);
+    cursor: pointer;
+    font-size: 12.5px;
+    gap: 10px;
+  }
+  .history-row:hover {
+    background: var(--bg-input);
+  }
+</style>
+</head>
+<body>
+<div class="browser-app">
+  <!-- 多标签栏 -->
+  <div class="tab-strip" id="tabStrip">
+    <button class="new-tab-btn" id="newTabBtn" title="新建标签页 (Ctrl+T)">+</button>
+  </div>
+
+  <!-- 导航工具栏 -->
+  <div class="nav-bar">
+    <button class="nav-btn" id="backBtn" title="后退">←</button>
+    <button class="nav-btn" id="forwardBtn" title="前进">→</button>
+    <button class="nav-btn" id="reloadBtn" title="刷新">↻</button>
+    <button class="nav-btn" id="homeBtn" title="新标签页">⌂</button>
+
+    <div class="omnibox">
+      <span class="engine-badge" id="engineBadge" title="当前代理内核状态">检测中...</span>
+      <input
+        type="text"
+        class="url-input"
+        id="urlInput"
+        placeholder="输入网址（如 192.168.1.1 或 github.com）或搜索内容..."
+        autocomplete="off"
+        spellcheck="false"
+      />
+      <button class="star-btn" id="starBtn" title="收藏当前页面">☆</button>
+    </div>
+
+    <button class="nav-btn" id="historyBtn" title="历史记录">🕒</button>
+    <button class="nav-btn" id="themeBtn" title="切换深浅色主题">🌓</button>
+    <div class="loading-bar" id="loadingBar"></div>
+  </div>
+
+  <!-- 书签快捷栏 -->
+  <div class="bookmark-bar" id="bookmarkBar"></div>
+
+  <!-- 页面视口容器 -->
+  <div class="viewport-container" id="viewportContainer"></div>
+</div>
+
+<!-- 添加书签弹窗 -->
+<div class="modal-backdrop" id="bookmarkModal">
+  <div class="modal-card">
+    <h3>添加快捷书签</h3>
+    <div class="form-group">
+      <label>网站名称</label>
+      <input type="text" id="bmTitleInput" placeholder="例如：路由器后台" />
+    </div>
+    <div class="form-group">
+      <label>网址 (URL)</label>
+      <input type="text" id="bmUrlInput" placeholder="http://192.168.1.1" />
+    </div>
+    <div class="form-group">
+      <label>分组</label>
+      <select id="bmCatInput">
+        <option value="内网设备">内网设备</option>
+        <option value="常用网站">常用网站</option>
+        <option value="飞牛生态">飞牛生态</option>
+      </select>
+    </div>
+    <div class="modal-actions">
+      <button class="btn" id="closeBmModal">取消</button>
+      <button class="btn btn-primary" id="saveBmBtn">保存</button>
+    </div>
+  </div>
+</div>
+
+<!-- 历史记录弹窗 -->
+<div class="modal-backdrop" id="historyModal">
+  <div class="modal-card">
+    <div style="display:flex;justify-content:space-between;align-items:center;">
+      <h3 style="margin:0;">浏览历史</h3>
+      <button class="btn" id="clearHistoryBtn">清空记录</button>
+    </div>
+    <div class="history-list" id="historyList"></div>
+    <div class="modal-actions">
+      <button class="btn" id="closeHistoryModal">关闭</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const SEARCH_ENGINES = {
+  bing: { name: '必应', url: 'https://cn.bing.com/search?q=' },
+  baidu: { name: '百度', url: 'https://www.baidu.com/s?wd=' },
+  google: { name: 'Google', url: 'https://www.google.com/search?q=' },
+  duckduckgo: { name: 'DuckDuckGo', url: 'https://duckduckgo.com/?q=' }
+};
+
+const state = {
+  tabs: [],
+  activeTabId: null,
+  bookmarks: [],
+  settings: { searchEngine: 'bing', theme: 'system' },
+  engineMode: 'lite',
+  sj: { ready: false, controller: null, bootPromise: null }
+};
+
+// Base64URL 编码（用于内置轻量代理）
+function toBase64Url(str) {
+  const bytes = new TextEncoder().encode(str);
+  let binary = '';
+  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+  return btoa(binary).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
+}
+
+// 智能识别用户输入是网址还是搜索词
+function resolveUserInput(raw) {
+  const text = raw.trim();
+  if (!text) return 'fn://newtab';
+  if (text === 'fn://newtab') return text;
+
+  if (/^https?:\/\//i.test(text)) return text;
+
+  // 内网 IP 或带端口地址（如 192.168.1.1、10.0.0.1:8080、localhost:3000）
+  if (/^(localhost|(\d{1,3}\.){3}\d{1,3})(:\d+)?(\/.*)?$/i.test(text)) {
+    return `http://${text}`;
+  }
+
+  // 常见域名形式（无空格且含点号）
+  if (!/\s/.test(text) && /^[a-zA-Z0-9-]+(\.[a-zA-Z0-9-]+)+(:\d+)?(\/.*)?$/.test(text)) {
+    return `https://${text}`;
+  }
+
+  const engine = SEARCH_ENGINES[state.settings.searchEngine] || SEARCH_ENGINES.bing;
+  return engine.url + encodeURIComponent(text);
+}
+
+// 构造轻量代理访问地址（内网设备与 Scramjet 不可用时的回退路径）
+async function buildProxySrc(targetUrl) {
+  return `/lite-proxy/${toBase64Url(targetUrl)}`;
+}
+
+// 判断是否为内网地址（内网设备始终走轻量直连，Scramjet 的 Wisp 服务端默认也拒绝私网目标）
+function isIntranetUrl(targetUrl) {
+  try {
+    const host = new URL(targetUrl).hostname.toLowerCase();
+    if (host === 'localhost' || host === '::1' || host.endsWith('.local')) return true;
+    const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
+    if (m) {
+      const a = parseInt(m[1], 10);
+      const b = parseInt(m[2], 10);
+      if (a === 10 || a === 127) return true;
+      if (a === 172 && b >= 16 && b <= 31) return true;
+      if (a === 192 && b === 168) return true;
+      if (a === 169 && b === 254) return true;
+    }
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+function canUseScramjet(targetUrl) {
+  return state.sj.ready && !!state.sj.controller && !isIntranetUrl(targetUrl);
+}
+
+function loadScriptTag(src) {
+  return new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = src;
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('脚本加载失败: ' + src));
+    document.head.appendChild(s);
+  });
+}
+
+// 启动 Scramjet 内核：注册服务工作线程 → 加载内核脚本 → 建立 Epoxy/Wisp 传输 → 创建 Controller
+// 任何一步失败都只记录日志并保持 lite 回退，绝不阻断浏览器外壳本身。
+async function bootScramjet() {
+  if (state.sj.bootPromise) return state.sj.bootPromise;
+  state.sj.bootPromise = (async () => {
+    if (!('serviceWorker' in navigator)) {
+      throw new Error('当前浏览器不支持 Service Worker');
+    }
+    const registration = await navigator.serviceWorker.register('/sw.js', {
+      scope: '/',
+      updateViaCache: 'none'
+    });
+    await navigator.serviceWorker.ready;
+    if (!navigator.serviceWorker.controller) {
+      await new Promise((resolve) =>
+        navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true })
+      );
+    }
+    const serviceworker = navigator.serviceWorker.controller || registration.active;
+    if (!serviceworker) throw new Error('Service Worker 未能激活');
+
+    await loadScriptTag('/scramjet/scramjet.js');
+    await loadScriptTag('/controller/controller.api.js');
+    await loadScriptTag('/utils/scramjet-utils.js');
+
+    const { default: EpoxyTransport } = await import('/epoxy/index.mjs');
+    const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const transport = new EpoxyTransport({ wisp: `${scheme}//${location.host}/wisp/` });
+
+    const controller = new $scramjetController.Controller({
+      serviceworker,
+      transport,
+      config: {
+        scramjetPath: '/scramjet/scramjet.js',
+        wasmPath: '/scramjet/scramjet.wasm',
+        injectPath: '/controller/controller.inject.js'
+      }
+    });
+    await controller.wait();
+
+    state.sj.controller = controller;
+    state.sj.ready = true;
+
+    // 周期性唤醒服务工作线程，避免其被浏览器回收后首个导航丢失路由
+    setInterval(() => {
+      if (navigator.serviceWorker.controller) {
+        navigator.serviceWorker.controller.postMessage('keepalive');
+      }
+    }, 15000);
+
+    const badge = document.getElementById('engineBadge');
+    if (badge) badge.textContent = 'Scramjet 内核';
+    console.log('[fn-browser] Scramjet 内核已就绪');
+  })().catch((err) => {
+    state.sj.ready = false;
+    state.sj.controller = null;
+    const badge = document.getElementById('engineBadge');
+    if (badge) badge.textContent = '轻量直连内核';
+    console.warn('[fn-browser] Scramjet 启动失败，外网页面回退轻量直连内核:', err);
+  });
+  return state.sj.bootPromise;
+}
+
+// Scramjet 帧内发生导航（点击链接、重定向等）时同步地址栏与标签状态
+function onScramjetUrlChange(tabId, url) {
+  const tab = state.tabs.find((t) => t.id === tabId);
+  if (!tab || !url || !/^https?:\/\//i.test(url)) return;
+  const isProgrammatic = tab.sjExpectUrl === url;
+  tab.sjExpectUrl = null;
+  if (tab.url === url) return;
+  tab.url = url;
+  try {
+    tab.title = new URL(url).hostname;
+  } catch {}
+  renderTabStrip();
+  if (tabId === state.activeTabId) syncToolbarWithActiveTab();
+  if (!isProgrammatic) {
+    fetch('/api/history', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: tab.title, url })
+    }).catch(() => {});
+  }
+}
+
+// 通过 Scramjet 帧导航（每个标签页复用同一个帧元素与 Frame 对象）
+function navigateWithScramjet(tab, pane, targetUrl) {
+  if (!tab.sjFrame) {
+    pane.innerHTML = `<iframe class="proxy-frame" id="frame-${tab.id}"></iframe>`;
+    const frameEl = document.getElementById(`frame-${tab.id}`);
+    const plugins = [];
+    try {
+      plugins.push(new $scramjetUtils.UrlWatcherPlugin((url) => onScramjetUrlChange(tab.id, url)));
+    } catch (e) {
+      console.warn('[fn-browser] UrlWatcherPlugin 初始化失败:', e);
+    }
+    tab.sjFrame = state.sj.controller.createFrame(frameEl, { plugins });
+    frameEl.addEventListener('load', () => showLoading(false));
+  }
+  tab.sjExpectUrl = targetUrl;
+  tab.sjFrame.go(targetUrl);
+  setTimeout(() => showLoading(false), 1500);
+}
+
+// 主题应用
+function applyTheme(theme) {
+  let effective = theme;
+  if (theme === 'system') {
+    effective = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';
+  }
+  document.documentElement.setAttribute('data-theme', effective);
+}
+
+// 标签页管理
+function createTab(initialUrl = 'fn://newtab') {
+  const id = 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+  const tab = {
+    id,
+    title: '新标签页',
+    url: initialUrl,
+    history: [initialUrl],
+    historyIndex: 0
+  };
+  state.tabs.push(tab);
+
+  // 创建 DOM 面板
+  const pane = document.createElement('div');
+  pane.className = 'tab-pane';
+  pane.id = `pane-${id}`;
+  document.getElementById('viewportContainer').appendChild(pane);
+
+  switchTab(id);
+  navigateTab(id, initialUrl, true);
+  return id;
+}
+
+function closeTab(id, e) {
+  if (e) e.stopPropagation();
+  const idx = state.tabs.findIndex((t) => t.id === id);
+  if (idx === -1) return;
+
+  state.tabs.splice(idx, 1);
+  const pane = document.getElementById(`pane-${id}`);
+  if (pane) pane.remove();
+
+  if (state.tabs.length === 0) {
+    createTab('fn://newtab');
+    return;
+  }
+  if (state.activeTabId === id) {
+    const nextTab = state.tabs[Math.min(idx, state.tabs.length - 1)];
+    switchTab(nextTab.id);
+  } else {
+    renderTabStrip();
+  }
+}
+
+function switchTab(id) {
+  state.activeTabId = id;
+  document.querySelectorAll('.tab-pane').forEach((el) => {
+    el.classList.toggle('active', el.id === `pane-${id}`);
+  });
+  renderTabStrip();
+  syncToolbarWithActiveTab();
+}
+
+function getActiveTab() {
+  return state.tabs.find((t) => t.id === state.activeTabId);
+}
+
+async function navigateTab(id, rawInput, skipHistoryPush = false) {
+  const tab = state.tabs.find((t) => t.id === id);
+  if (!tab) return;
+
+  const targetUrl = resolveUserInput(rawInput);
+  tab.url = targetUrl;
+
+  if (!skipHistoryPush) {
+    tab.history = tab.history.slice(0, tab.historyIndex + 1);
+    tab.history.push(targetUrl);
+    tab.historyIndex = tab.history.length - 1;
+  }
+
+  const pane = document.getElementById(`pane-${id}`);
+  if (!pane) return;
+
+  if (targetUrl === 'fn://newtab') {
+    tab.title = '新标签页';
+    renderNewTabPage(pane, id);
+    renderTabStrip();
+    syncToolbarWithActiveTab();
+    return;
+  }
+
+  try {
+    tab.title = new URL(targetUrl).hostname;
+  } catch {
+    tab.title = targetUrl;
+  }
+
+  renderTabStrip();
+  syncToolbarWithActiveTab();
+  showLoading(true);
+
+  if (canUseScramjet(targetUrl)) {
+    // 外网页面走 Scramjet 内核
+    navigateWithScramjet(tab, pane, targetUrl);
+  } else {
+    // 内网设备 / Scramjet 未就绪：走内置轻量直连代理
+    tab.sjFrame = null;
+    const proxySrc = await buildProxySrc(targetUrl);
+    pane.innerHTML = `<iframe class="proxy-frame" id="frame-${id}" src="${proxySrc}"></iframe>`;
+    const frame = document.getElementById(`frame-${id}`);
+    frame.addEventListener('load', () => {
+      showLoading(false);
+      try {
+        const frameTitle = frame.contentDocument && frame.contentDocument.title;
+        if (frameTitle) {
+          tab.title = frameTitle;
+          renderTabStrip();
+        }
+      } catch {}
+    });
+  }
+
+  // 记录历史
+  fetch('/api/history', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: tab.title, url: targetUrl })
+  }).catch(() => {});
+}
+
+function showLoading(active) {
+  const bar = document.getElementById('loadingBar');
+  if (active) {
+    bar.classList.add('active');
+  } else {
+    bar.style.width = '100%';
+    setTimeout(() => {
+      bar.classList.remove('active');
+      bar.style.width = '0%';
+    }, 220);
+  }
+}
+
+function renderTabStrip() {
+  const strip = document.getElementById('tabStrip');
+  const newBtn = document.getElementById('newTabBtn');
+  strip.querySelectorAll('.tab-item').forEach((n) => n.remove());
+
+  state.tabs.forEach((tab) => {
+    const el = document.createElement('div');
+    el.className = `tab-item ${tab.id === state.activeTabId ? 'active' : ''}`;
+    el.onclick = () => switchTab(tab.id);
+    el.innerHTML = `
+      <span class="tab-dot"></span>
+      <span class="tab-title">${escapeHtml(tab.title)}</span>
+      <button class="tab-close" title="关闭">×</button>
+    `;
+    el.querySelector('.tab-close').onclick = (e) => closeTab(tab.id, e);
+    strip.insertBefore(el, newBtn);
+  });
+}
+
+function syncToolbarWithActiveTab() {
+  const tab = getActiveTab();
+  if (!tab) return;
+  const input = document.getElementById('urlInput');
+  input.value = tab.url === 'fn://newtab' ? '' : tab.url;
+
+  document.getElementById('backBtn').disabled = tab.historyIndex <= 0;
+  document.getElementById('forwardBtn').disabled = tab.historyIndex >= tab.history.length - 1;
+
+  const isStarred = state.bookmarks.some((b) => b.url === tab.url);
+  const starBtn = document.getElementById('starBtn');
+  starBtn.textContent = isStarred ? '★' : '☆';
+  starBtn.classList.toggle('starred', isStarred);
+}
+
+function renderBookmarkBar() {
+  const bar = document.getElementById('bookmarkBar');
+  bar.innerHTML = '';
+  state.bookmarks.forEach((bm) => {
+    const chip = document.createElement('div');
+    chip.className = 'bm-chip';
+    chip.title = bm.url;
+    chip.innerHTML = `<span class="bm-dot" style="background:${bm.color || '#165DFF'}"></span><span>${escapeHtml(bm.title)}</span>`;
+    chip.onclick = () => {
+      const tab = getActiveTab();
+      if (tab) navigateTab(tab.id, bm.url);
+    };
+    bar.appendChild(chip);
+  });
+}
+
+function renderNewTabPage(pane, tabId) {
+  const now = new Date();
+  const timeStr = now.toTimeString().slice(0, 5);
+  const engineKey = state.settings.searchEngine || 'bing';
+
+  const groups = {};
+  state.bookmarks.forEach((b) => {
+    const cat = b.category || '常用网站';
+    if (!groups[cat]) groups[cat] = [];
+    groups[cat].push(b);
+  });
+
+  let sectionsHtml = '';
+  Object.keys(groups).forEach((cat) => {
+    const cards = groups[cat]
+      .map(
+        (b) => `
+      <div class="site-card" data-url="${escapeHtml(b.url)}">
+        <div class="site-avatar" style="background:${b.color || '#165DFF'}">${escapeHtml(b.title.slice(0, 1))}</div>
+        <div class="site-meta">
+          <div class="site-name">${escapeHtml(b.title)}</div>
+          <div class="site-url">${escapeHtml(b.url)}</div>
+        </div>
+        <button class="site-del" data-id="${escapeHtml(b.id)}" title="删除">×</button>
+      </div>`
+      )
+      .join('');
+
+    sectionsHtml += `
+      <div class="section-box">
+        <div class="section-title">
+          <span>${escapeHtml(cat)}</span>
+          <span class="add-bm-link" data-add-bm="1">+ 添加快捷方式</span>
+        </div>
+        <div class="cards-grid">${cards}</div>
+      </div>`;
+  });
+
+  if (Object.keys(groups).length === 0) {
+    sectionsHtml = `
+      <div class="section-box">
+        <div class="section-title">
+          <span>快捷导航</span>
+          <span class="add-bm-link" data-add-bm="1">+ 添加快捷方式</span>
+        </div>
+      </div>`;
+  }
+
+  pane.innerHTML = `
+    <div class="newtab-page">
+      <div class="hero-header">
+        <div class="hero-clock">${timeStr}</div>
+        <div class="hero-sub">飞牛纯原生浏览器 · 安全访问内网设备与互联网</div>
+      </div>
+      <div class="hero-search">
+        <select id="heroEngine-${tabId}">
+          <option value="bing" ${engineKey === 'bing' ? 'selected' : ''}>必应</option>
+          <option value="baidu" ${engineKey === 'baidu' ? 'selected' : ''}>百度</option>
+          <option value="google" ${engineKey === 'google' ? 'selected' : ''}>Google</option>
+          <option value="duckduckgo" ${engineKey === 'duckduckgo' ? 'selected' : ''}>DuckDuckGo</option>
+        </select>
+        <input type="text" id="heroInput-${tabId}" placeholder="输入搜索关键词或内网 IP / 网址..." />
+        <button id="heroGo-${tabId}">前往</button>
+      </div>
+      ${sectionsHtml}
+    </div>
+  `;
+
+  const heroInput = document.getElementById(`heroInput-${tabId}`);
+  const heroGo = document.getElementById(`heroGo-${tabId}`);
+  const heroEngine = document.getElementById(`heroEngine-${tabId}`);
+
+  heroEngine.onchange = async (e) => {
+    state.settings.searchEngine = e.target.value;
+    await fetch('/api/settings', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ searchEngine: e.target.value })
+    });
+  };
+
+  const triggerSearch = () => {
+    if (heroInput.value.trim()) navigateTab(tabId, heroInput.value);
+  };
+  heroGo.onclick = triggerSearch;
+  heroInput.onkeydown = (e) => {
+    if (e.key === 'Enter') triggerSearch();
+  };
+
+  pane.querySelectorAll('.site-card').forEach((card) => {
+    card.onclick = () => navigateTab(tabId, card.getAttribute('data-url'));
+  });
+
+  pane.querySelectorAll('.site-del').forEach((btn) => {
+    btn.onclick = async (e) => {
+      e.stopPropagation();
+      const bmId = btn.getAttribute('data-id');
+      await fetch(`/api/bookmarks/${encodeURIComponent(bmId)}`, { method: 'DELETE' });
+      await loadBookmarks();
+      renderNewTabPage(pane, tabId);
+    };
+  });
+
+  pane.querySelectorAll('[data-add-bm]').forEach((el) => {
+    el.onclick = () => openBookmarkModal();
+  });
+}
+
+function escapeHtml(str) {
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+// ---------------------------------------------------------------------------
+// 书签与历史交互
+// ---------------------------------------------------------------------------
+async function loadBookmarks() {
+  const resp = await fetch('/api/bookmarks');
+  state.bookmarks = await resp.json();
+  renderBookmarkBar();
+  syncToolbarWithActiveTab();
+}
+
+function openBookmarkModal(prefillTitle = '', prefillUrl = '') {
+  document.getElementById('bmTitleInput').value = prefillTitle;
+  document.getElementById('bmUrlInput').value = prefillUrl;
+  document.getElementById('bookmarkModal').classList.add('open');
+}
+
+document.getElementById('closeBmModal').onclick = () => {
+  document.getElementById('bookmarkModal').classList.remove('open');
+};
+
+document.getElementById('saveBmBtn').onclick = async () => {
+  const title = document.getElementById('bmTitleInput').value.trim();
+  const rawUrl = document.getElementById('bmUrlInput').value.trim();
+  const category = document.getElementById('bmCatInput').value;
+  if (!rawUrl) return;
+  const url = resolveUserInput(rawUrl);
+
+  const colors = ['#165DFF', '#00B42A', '#FF7D00', '#722ED1', '#0FC6C2', '#F53F3F'];
+  const color = colors[Math.floor(Math.random() * colors.length)];
+
+  await fetch('/api/bookmarks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title: title || url, url, category, color })
+  });
+  document.getElementById('bookmarkModal').classList.remove('open');
+  await loadBookmarks();
+  const tab = getActiveTab();
+  if (tab && tab.url === 'fn://newtab') {
+    renderNewTabPage(document.getElementById(`pane-${tab.id}`), tab.id);
+  }
+};
+
+document.getElementById('starBtn').onclick = async () => {
+  const tab = getActiveTab();
+  if (!tab || tab.url === 'fn://newtab') return;
+  const existing = state.bookmarks.find((b) => b.url === tab.url);
+  if (existing) {
+    await fetch(`/api/bookmarks/${encodeURIComponent(existing.id)}`, { method: 'DELETE' });
+    await loadBookmarks();
+  } else {
+    openBookmarkModal(tab.title, tab.url);
+  }
+};
+
+// 历史记录弹窗
+document.getElementById('historyBtn').onclick = async () => {
+  const resp = await fetch('/api/history');
+  const list = await resp.json();
+  const container = document.getElementById('historyList');
+  if (!list.length) {
+    container.innerHTML = '<p style="color:var(--text-muted);padding:16px 0;text-align:center;">暂无浏览记录</p>';
+  } else {
+    container.innerHTML = list
+      .map(
+        (h) => `
+      <div class="history-row" data-url="${escapeHtml(h.url)}">
+        <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${escapeHtml(h.title)}</span>
+        <span style="color:var(--text-muted);font-size:11px;">${new Date(h.visitedAt).toLocaleTimeString()}</span>
+      </div>`
+      )
+      .join('');
+    container.querySelectorAll('.history-row').forEach((row) => {
+      row.onclick = () => {
+        document.getElementById('historyModal').classList.remove('open');
+        const tab = getActiveTab();
+        if (tab) navigateTab(tab.id, row.getAttribute('data-url'));
+      };
+    });
+  }
+  document.getElementById('historyModal').classList.add('open');
+};
+
+document.getElementById('closeHistoryModal').onclick = () => {
+  document.getElementById('historyModal').classList.remove('open');
+};
+
+document.getElementById('clearHistoryBtn').onclick = async () => {
+  await fetch('/api/history', { method: 'DELETE' });
+  document.getElementById('historyList').innerHTML =
+    '<p style="color:var(--text-muted);padding:16px 0;text-align:center;">已清空浏览记录</p>';
+};
+
+// ---------------------------------------------------------------------------
+// 顶部工具栏按钮与快捷键绑定
+// ---------------------------------------------------------------------------
+document.getElementById('newTabBtn').onclick = () => createTab('fn://newtab');
+
+document.getElementById('backBtn').onclick = () => {
+  const tab = getActiveTab();
+  if (tab && tab.historyIndex > 0) {
+    tab.historyIndex -= 1;
+    navigateTab(tab.id, tab.history[tab.historyIndex], true);
+  }
+};
+
+document.getElementById('forwardBtn').onclick = () => {
+  const tab = getActiveTab();
+  if (tab && tab.historyIndex < tab.history.length - 1) {
+    tab.historyIndex += 1;
+    navigateTab(tab.id, tab.history[tab.historyIndex], true);
+  }
+};
+
+document.getElementById('reloadBtn').onclick = () => {
+  const tab = getActiveTab();
+  if (tab) navigateTab(tab.id, tab.url, true);
+};
+
+document.getElementById('homeBtn').onclick = () => {
+  const tab = getActiveTab();
+  if (tab) navigateTab(tab.id, 'fn://newtab');
+};
+
+document.getElementById('urlInput').onkeydown = (e) => {
+  if (e.key === 'Enter') {
+    const tab = getActiveTab();
+    if (tab) navigateTab(tab.id, e.target.value);
+  }
+};
+
+document.getElementById('themeBtn').onclick = async () => {
+  const current = document.documentElement.getAttribute('data-theme');
+  const next = current === 'dark' ? 'light' : 'dark';
+  state.settings.theme = next;
+  applyTheme(next);
+  await fetch('/api/settings', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ theme: next })
+  });
+};
+
+// 监听 iframe 内部发送的导航同步事件
+window.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'fn-browser-nav') {
+    const tab = getActiveTab();
+    if (tab && event.data.title) {
+      tab.title = event.data.title;
+      renderTabStrip();
+    }
+  }
+});
+
+// 快捷键支持
+window.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 't') {
+    e.preventDefault();
+    createTab('fn://newtab');
+  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'l') {
+    e.preventDefault();
+    const input = document.getElementById('urlInput');
+    input.focus();
+    input.select();
+  }
+});
+
+// 启动初始化
+(async function init() {
+  try {
+    const [statusResp, settingsResp] = await Promise.all([
+      fetch('/api/status'),
+      fetch('/api/settings')
+    ]);
+    const status = await statusResp.json();
+    state.engineMode = status.engine || 'lite';
+    const badge = document.getElementById('engineBadge');
+    badge.textContent = state.engineMode === 'scramjet' ? 'Scramjet 内核启动中…' : '轻量直连内核';
+    badge.title = `内存占用: ${status.memoryMB} MB`;
+    if (state.engineMode === 'scramjet') {
+      bootScramjet();
+    }
+
+    state.settings = await settingsResp.json();
+    applyTheme(state.settings.theme || 'system');
+  } catch (e) {
+    applyTheme('system');
+  }
+
+  await loadBookmarks();
+  createTab('fn://newtab');
+})();
+</script>
+</body>
+</html>
