@@ -48,13 +48,12 @@ const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
 
 const DEFAULT_BOOKMARKS = [
-    { id: 'bm-1', title: '路由器后台', url: 'http://192.168.1.1', category: '内网设备', color: '#165DFF' },
-    { id: 'bm-2', title: '光猫管理', url: 'http://192.168.1.1:8080', category: '内网设备', color: '#00B42A' },
-    { id: 'bm-3', title: 'PVE / 虚拟化', url: 'https://192.168.1.2:8006', category: '内网设备', color: '#FF7D00' },
-    { id: 'bm-4', title: '必应搜索', url: 'https://cn.bing.com', category: '常用网站', color: '#0FC6C2' },
-    { id: 'bm-5', title: 'GitHub', url: 'https://github.com', category: '常用网站', color: '#24292F' },
-    { id: 'bm-6', title: '哔哩哔哩', url: 'https://www.bilibili.com', category: '常用网站', color: '#FB7299' },
-    { id: 'bm-7', title: '飞牛官网', url: 'https://www.fnnas.com', category: '飞牛生态', color: '#3491FA' }
+    { id: 'bm-1', title: '必应搜索', url: 'https://cn.bing.com', category: '常用网站', color: '#0FC6C2' },
+    { id: 'bm-2', title: 'Bilibili', url: 'https://www.bilibili.com', category: '常用网站', color: '#FB7299' },
+    { id: 'bm-3', title: 'GitHub', url: 'https://github.com', category: '常用网站', color: '#24292F' },
+    { id: 'bm-4', title: 'OpenAI', url: 'https://openai.com', category: '常用网站', color: '#10A37F' },
+    { id: 'bm-5', title: 'Gemini', url: 'https://gemini.google.com', category: '常用网站', color: '#4796E3' },
+    { id: 'bm-6', title: 'Muse', url: 'https://muse.ai', category: '常用网站', color: '#7B61FF' }
 ];
 
 const DEFAULT_SETTINGS = {
