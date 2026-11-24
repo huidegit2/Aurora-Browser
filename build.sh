@@ -78,6 +78,10 @@ STAGE_DIR="$(mktemp -d)"
 trap 'rm -rf "$STAGE_DIR"' EXIT
 cp -a manifest ICON.PNG ICON_256.PNG app cmd config wizard "$STAGE_DIR/"
 mkdir -p "$STAGE_DIR/app/runtime"
+# Ship exactly one Node binary: drop the download-cache node-<arch> files
+# (and any stale runtime left by a previous arch build in this workspace)
+# so the same binary never lands in the package twice.
+rm -f "$STAGE_DIR"/app/runtime/node "$STAGE_DIR"/app/runtime/node-*
 cp "$NODE_BIN" "$STAGE_DIR/app/runtime/node"
 chmod +x "$STAGE_DIR"/cmd/* "$STAGE_DIR/app/runtime/node"
 
