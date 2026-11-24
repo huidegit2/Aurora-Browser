@@ -1,8 +1,12 @@
 # 更新日志
 
-## [Unreleased]
+## [1.0.4] - 2026-11-24
 
-- 图标替换为定稿的「极光球」设计：四张 PNG 全部由 `assets/icon.svg` 内嵌的 256×256 原图生成，直角方形满幅、无圆角。
+### 修复
+
+- 修复 ARM 设备安装被拒（「应用包不符合系统要求」）：`config/resource` 从空 `{}` 改为含 `fn-browser` 和 `fn-browser/data` 两个 share 的合法 `data-share` 结构；`config/privilege` 改为飞牛模板要求的 4 空格缩进格式。
+- 图标替换为定稿的「极光球」设计：四张 PNG 全部由 `assets/icon.svg` 内嵌的 256×256 原图生成，直角方形满幅、无圆角，且为带 alpha 通道的 RGBA（飞牛对 RGB 图标可能拒装）。
+- 删除 manifest 中非标准字段 `checkport`，补充 `distributor_url`。
 - `scripts/generate_icons.py` 改为直接读取 SVG 内嵌 PNG 并用纯标准库做高质量缩放，构建时不再重新绘制旧图案。
 
 ## [1.0.3] - 2026-11-24

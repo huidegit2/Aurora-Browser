@@ -1,1 +1,21 @@
-{}
+{
+    "data-share":
+    {
+        "shares": [
+            {
+                "name": "fn-browser",
+                "permission":
+                {
+                    "rw": ["fn-browser"]
+                }
+            },
+            {
+                "name": "fn-browser/data",
+                "permission":
+                {
+                    "rw": ["fn-browser"]
+                }
+            }
+        ]
+    }
+}
