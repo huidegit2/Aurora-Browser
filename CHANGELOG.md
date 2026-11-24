@@ -1,5 +1,9 @@
 # 更新日志
 
+## [Unreleased]
+
+- 新增可编辑的矢量图标源 `assets/icon.svg`，与 `scripts/generate_icons.py` 生成的 PNG 图案一致。
+
 ## [1.0.3] - 2026-11-24
 
 ### 修复

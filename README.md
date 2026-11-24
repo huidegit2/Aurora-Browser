@@ -31,7 +31,7 @@
 
 内部 `appname` 固定为 `fn-browser`，保证老版本覆盖升级；应用中心显示名为「极光」。
 
-图标由 `scripts/generate_icons.py` 生成（纯标准库，可复现）：`ICON.PNG` 64×64、`ICON_256.PNG` 256×256、`app/ui/images/icon_64.png`、`icon_256.png`。fnpack 会在打包前强制校验这四个文件以及 `cmd/`、`config/`、`wizard/` 目录。
+可编辑的矢量设计源是 `assets/icon.svg`；`scripts/generate_icons.py` 生成实际入库的 PNG（纯标准库，可复现，不依赖渲染器）：`ICON.PNG` 64×64、`ICON_256.PNG` 256×256、`app/ui/images/icon_64.png`、`icon_256.png`。两者图案一致，改设计优先改 SVG，然后用 Inkscape/CairoSVG 导出 PNG 覆盖。fnpack 会在打包前强制校验这四个 PNG 以及 `cmd/`、`config/`、`wizard/` 目录。
 
 ## 自动构建与发布
 
@@ -61,6 +61,7 @@ https://<nas>:18920/?_aurora_token=<your-token>
 - `app/server/` — Node.js 服务端（Scramjet/Wisp + 轻量代理 + 书签/历史 API）
 - `app/www/` — 前端页面与 Service Worker
 - `app/ui/` — 飞牛桌面入口配置与图标
+- `assets/icon.svg` — 图标矢量设计源
 - `scripts/` — 图标生成、更新日志提取
 - `.github/workflows/release.yml` — 自动构建与发布
 

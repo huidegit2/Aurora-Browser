@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256" role="img" aria-label="极光 Aurora 图标">
+  <defs>
+    <linearGradient id="aurora-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0e1644"/>
+      <stop offset="1" stop-color="#4c2e8a"/>
+    </linearGradient>
+    <linearGradient id="aurora-1" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#44e2c4" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#44e2c4" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#44e2c4" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="aurora-2" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#5c9eff" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#5c9eff" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#5c9eff" stop-opacity="0"/>
+    </linearGradient>
+    <linearGradient id="aurora-3" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#c478f6" stop-opacity="0"/>
+      <stop offset="0.5" stop-color="#c478f6" stop-opacity="0.72"/>
+      <stop offset="1" stop-color="#c478f6" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <rect width="256" height="256" fill="url(#aurora-bg)"/>
+
+  <path d="M0 50 C 48 20, 80 88, 128 58 S 208 20, 256 50 L256 78 C208 48, 176 116,128 86 S48 48,0 78 Z" fill="url(#aurora-1)"/>
+  <path d="M0 100 C 48 132, 80 64, 128 94 S 208 132, 256 102 L256 130 C208 160, 176 92,128 122 S48 160,0 130 Z" fill="url(#aurora-2)"/>
+  <path d="M0 152 C 48 122, 80 190, 128 160 S 208 122, 256 152 L256 174 C208 144, 176 212,128 182 S48 144,0 174 Z" fill="url(#aurora-3)"/>
+
+  <path d="M88 194 L128 62 L168 194 M105 140 H151" fill="none" stroke="#f6faff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>
