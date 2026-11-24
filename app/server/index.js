@@ -31,6 +31,23 @@ function isAuthorized(req, parsedUrl) {
     return headerToken === AUTH_TOKEN || queryToken === AUTH_TOKEN;
 }
 
+// Rammerhead 路由与轻量代理执行同一套令牌保护（X-Aurora-Token 头或
+// ?_aurora_token= 参数）；但其帧内子请求（脚本/图片/XHR 的地址由
+// hammerhead 在服务端改写）无法携带头或参数，故额外接受外壳在同源下
+// 种的 aurora_token cookie 作为凭据（与该内核自用的 origin_proxy
+// cookie 是同一模式）。
+function isRhAuthorized(req, parsedUrl) {
+    if (!AUTH_TOKEN) return true;
+    if (isAuthorized(req, parsedUrl)) return true;
+    const match = /(?:^|;\s*)aurora_token=([^;]+)/.exec(req.headers.cookie || '');
+    if (!match) return false;
+    try {
+        return decodeURIComponent(match[1]) === AUTH_TOKEN;
+    } catch {
+        return match[1] === AUTH_TOKEN;
+    }
+}
+
 const PORT = parseInt(process.env.PORT || '18920', 10);
 const HOST = process.env.HOST || '0.0.0.0';
 const WWW_DIR = process.env.WWW_DIR || path.resolve(__dirname, '../www');
@@ -126,6 +143,169 @@ try {
 } catch (err) {
     console.log(`[fn-browser] 未检测到 Scramjet 依赖，启用内置零依赖轻量代理内核（${err.message}）`);
 }
+
+// ---------------------------------------------------------------------------
+// 2b. Rammerhead 内核（@rubynetwork/rammerhead 1.3.x，Ruby Network 维护版）
+//     服务端会话式代理：不依赖 Service Worker，专供以 HTTP（非安全上下文）
+//     打开应用时的外网页面；HTTPS 下仍由 Scramjet 担任主内核，内网地址
+//     始终走轻量直连。其作用域位于站点根路径（/newsession、/messaging、
+//     /<32 位会话 id>/... 等），与 /wisp/、/scramjet/ 等路径互不重叠。
+//     依赖缺失或初始化失败时仅回退轻量代理，绝不阻断应用启动。
+// ---------------------------------------------------------------------------
+let rhAvailable = false;
+let rhCore = null; // { instance, shouldRouteRh, routeRhRequest, routeRhUpgrade }
+const RH_SESSION_DIR = path.join(DATA_DIR, 'rammerhead-sessions');
+fs.mkdirSync(RH_SESSION_DIR, { recursive: true });
+
+// Rammerhead 页面桥接脚本：hammerhead 会把 target=_blank / window.open 的
+// 新窗口导航虚拟化成真实浏览器窗口，在外壳 iframe 里表现为「弹出一个裸
+// 会话地址的独立窗口」。本脚本经会话的 injectable.scripts 注入每个被
+// 代理页面（脚本地址由本服务在站点根路径直接提供，见下方路由），在捕
+// 获阶段拦截新窗口手势并 postMessage 通知外壳改开新标签页。
+const RH_BRIDGE_SCRIPT_PATH = '/aurora-rh-bridge.js';
+const RH_BRIDGE_SCRIPT = `/* aurora-rh-bridge */
+(function () {
+  if (window.__auroraRhBridge) return;
+  window.__auroraRhBridge = true;
+
+  function reportOpen(url) {
+    try {
+      var target = window.parent && window.parent !== window ? window.parent : window.top;
+      target.postMessage({ source: 'fn-browser-rh', type: 'open', url: String(url) }, '*');
+    } catch (e) {}
+  }
+
+  function popupAnchor(e) {
+    var t = e.target;
+    var a = t && t.closest ? t.closest('a[href], area[href]') : null;
+    if (!a) return null;
+    var raw = a.getAttribute('href') || '';
+    if (/^(javascript:|data:|blob:|mailto:|tel:|#)/i.test(raw)) return null;
+    var targetAttr = (a.getAttribute('target') || '').toLowerCase();
+    if (targetAttr === '_blank' || e.button === 1 || e.ctrlKey || e.metaKey) return a;
+    return null;
+  }
+
+  document.addEventListener(
+    'click',
+    function (e) {
+      var a = popupAnchor(e);
+      if (!a) return;
+      e.preventDefault();
+      e.stopPropagation();
+      if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+      if (a.href) reportOpen(a.href);
+    },
+    true
+  );
+
+  var nativeOpen = window.open;
+  try {
+    window.open = function (url) {
+      if (url != null && String(url) !== '') {
+        var resolved = String(url);
+        try {
+          resolved = new URL(resolved, window.location.href).href;
+        } catch (err) {}
+        reportOpen(resolved);
+        return null;
+      }
+      return nativeOpen ? nativeOpen.apply(window, arguments) : null;
+    };
+  } catch (e) {}
+})();
+`;
+
+function shouldRouteRhSafe(req) {
+    if (!rhAvailable || !rhCore) return false;
+    try {
+        return rhCore.shouldRouteRh(req);
+    } catch {
+        return false;
+    }
+}
+
+const rhReady = (async () => {
+    try {
+        // 必须先于 createRammerhead 改写 @rubynetwork/rh 的默认配置：
+        //  - 会话文件默认写进包内 node_modules 目录，改为落盘 DATA_DIR，
+        //    避免应用升级覆盖或目录只读导致会话不可用；
+        //  - JS 重写磁盘缓存默认写在包内且上限 5GB，改为 64MB 内存缓存；
+        //  - 默认 getServerInfo 缺 cookie 时硬编码 https 协议且会把整个
+        //    socket 对象打进日志，改为「origin_proxy cookie 优先（外壳种下
+        //    的真实源）、Host 头推导兜底」。
+        const rhConfig = (await import('@rubynetwork/rh/src/config.js')).default;
+        const { default: RammerheadJSMemCache } = await import(
+            '@rubynetwork/rh/src/classes/RammerheadJSMemCache.js'
+        );
+        rhConfig.jsCache = new RammerheadJSMemCache(64 * 1024 * 1024);
+        rhConfig.fileCacheSessionConfig.saveDirectory = RH_SESSION_DIR;
+        rhConfig.getServerInfo = (req) => {
+            let origin = null;
+            try {
+                const match = /(?:^|;\s*)origin_proxy=([^;]+)/.exec(req.headers.cookie || '');
+                if (match) origin = new URL(decodeURIComponent(match[1]));
+            } catch {}
+            if (!origin) {
+                try {
+                    origin = new URL(`http://${req.headers.host || 'localhost'}`);
+                } catch {}
+            }
+            if (!origin) {
+                return { hostname: 'localhost', port: '', crossDomainPort: '', protocol: 'http:' };
+            }
+            return {
+                hostname: origin.hostname,
+                port: origin.port,
+                crossDomainPort: origin.port,
+                protocol: origin.protocol
+            };
+        };
+
+        // 把桥接脚本挂进每个会话的 injectable.scripts（hammerhead 会在
+        // 每个被代理页面的 <head> 里按顺序注入这些脚本）。会话在本进程
+        // 内的唯一物化入口是 RammerheadSession.DeserializeSession：
+        // /newsession 经 addSerializedSession、磁盘恢复经 FileCache.get，
+        // 都 funnel 过它。在此包装一层，会话（含旧版本已落盘的）都会带上
+        // 桥接脚本；includes 去重，重复反序列化不会叠加。
+        const { default: RammerheadSession } = await import(
+            '@rubynetwork/rh/src/classes/RammerheadSession.js'
+        );
+        const origDeserializeSession = RammerheadSession.DeserializeSession;
+        if (typeof origDeserializeSession === 'function' && !origDeserializeSession.__auroraBridgePatched) {
+            const patchedDeserializeSession = function (id, serializedSession) {
+                const session = origDeserializeSession.call(this, id, serializedSession);
+                try {
+                    const scripts = session && session.injectable && session.injectable.scripts;
+                    if (Array.isArray(scripts) && !scripts.includes(RH_BRIDGE_SCRIPT_PATH)) {
+                        scripts.push(RH_BRIDGE_SCRIPT_PATH);
+                    }
+                } catch {}
+                return session;
+            };
+            patchedDeserializeSession.__auroraBridgePatched = true;
+            RammerheadSession.DeserializeSession = patchedDeserializeSession;
+        }
+
+        const rhPkg = await import('@rubynetwork/rammerhead');
+        const instance = rhPkg.createRammerhead({
+            logLevel: 'warn',
+            reverseProxy: false,
+            disableLocalStorageSync: false,
+            disableHttp2: false
+        });
+        rhCore = {
+            instance,
+            shouldRouteRh: rhPkg.shouldRouteRh,
+            routeRhRequest: rhPkg.routeRhRequest,
+            routeRhUpgrade: rhPkg.routeRhUpgrade
+        };
+        rhAvailable = true;
+        console.log(`[fn-browser] Rammerhead 内核已就绪（HTTP 模式外网代理，会话目录: ${RH_SESSION_DIR}）`);
+    } catch (err) {
+        console.log(`[fn-browser] Rammerhead 内核不可用，HTTP 模式继续使用轻量代理（${err.message}）`);
+    }
+})();
 
 // Scramjet 静态资源挂载点（路径与 controller 默认配置保持一致）
 //   /scramjet/scramjet.js, /scramjet/scramjet.wasm
@@ -416,9 +596,13 @@ async function handleApi(req, res, pathname, parsedUrl) {
 
     // 系统状态与内核信息
     if (pathname === '/api/status' && req.method === 'GET') {
+        // 等待 Rammerhead 初始化收敛（其 Promise 永不 reject），避免外壳在
+        // 启动瞬间误判该内核不可用
+        await rhReady;
         return sendJson(res, 200, {
             ok: true,
             engine: engineMode,
+            rammerhead: rhAvailable,
             version: APP_VERSION,
             uptime: Math.floor(process.uptime()),
             memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024)
@@ -544,9 +728,29 @@ const server = http.createServer(async (req, res) => {
             });
         }
 
+        // Rammerhead 页面桥接脚本（被注入的代理页面从站点根路径取用；
+        // 内容为静态脚本、无任何密钥，与外壳页同级公开提供）
+        if (pathname === RH_BRIDGE_SCRIPT_PATH) {
+            res.writeHead(200, {
+                'Content-Type': 'application/javascript; charset=utf-8',
+                'Cache-Control': 'no-cache'
+            });
+            return res.end(RH_BRIDGE_SCRIPT);
+        }
+
         // Scramjet 内核静态资源
         if (serveScramjetAsset(req, res, pathname)) {
             return;
+        }
+
+        // Rammerhead 内核路由（根路径作用域，必须先于 /api/ 判断，
+        // 因为其作用域包含 /api/shuffleDict）
+        if (shouldRouteRhSafe(req)) {
+            if (!isRhAuthorized(req, parsedUrl)) {
+                res.writeHead(401, { 'Content-Type': 'text/plain; charset=utf-8' });
+                return res.end('Unauthorized');
+            }
+            return rhCore.routeRhRequest(rhCore.instance, req, res);
         }
 
         // 内置轻量代理路由
@@ -575,7 +779,8 @@ const server = http.createServer(async (req, res) => {
     }
 });
 
-// WebSocket 升级入口：/wisp/ 交给 Wisp 服务端（Scramjet 的出站传输通道）
+// WebSocket 升级入口：/wisp/ 交给 Wisp 服务端（Scramjet 的出站传输通道），
+// Rammerhead 作用域内的升级交给其自身（被代理站点的 WebSocket 连接）
 server.on('upgrade', (req, socket, head) => {
     try {
         const parsed = new URL(req.url || '/', 'http://localhost');
@@ -585,6 +790,12 @@ server.on('upgrade', (req, socket, head) => {
             }
             req.url = parsed.pathname;
             return wispRouteRequest(req, socket, head);
+        }
+        if (shouldRouteRhSafe(req)) {
+            if (!isRhAuthorized(req, parsed)) {
+                return socket.destroy();
+            }
+            return rhCore.routeRhUpgrade(rhCore.instance, req, socket, head);
         }
     } catch (err) {
         console.error('[fn-browser] WebSocket upgrade error:', err);

@@ -1147,6 +1147,12 @@
   try {
     const fromUrl = new URLSearchParams(location.search).get('_aurora_token');
     if (fromUrl) sessionStorage.setItem('auroraToken', fromUrl);
+    const token = sessionStorage.getItem('auroraToken');
+    if (token) {
+      // Rammerhead 帧内子请求无法携带令牌头/查询参数（地址由服务端改写），
+      // 改用同源 cookie 传递令牌，服务端对该内核路由单独认可此凭据
+      document.cookie = `aurora_token=${encodeURIComponent(token)}; path=/; SameSite=Lax`;
+    }
   } catch (e) {}
 })();
 
@@ -1182,7 +1188,8 @@ const state = {
   settings: { searchEngine: 'bing', theme: 'system' },
   engineMode: 'lite',
   ui: { showBookmarksBar: true, sidebarOpen: false, sidebarPanel: 'history' },
-  sj: { ready: false, controller: null, bootPromise: null }
+  sj: { ready: false, controller: null, bootPromise: null },
+  rh: { available: false, sessionId: null, sessionPromise: null }
 };
 
 // Base64URL 编码（用于内置轻量代理）
@@ -1256,6 +1263,68 @@ function canUseScramjet(targetUrl) {
   return state.sj.ready && !!state.sj.controller && !isIntranetUrl(targetUrl);
 }
 
+// ---------------------------------------------------------------------------
+// 内核角标：优先反映当前标签页实际使用的内核；新标签页等无内核归属时，
+// 反映下一次外网导航将使用的默认内核。
+// ---------------------------------------------------------------------------
+function kernelLabelForActiveTab() {
+  const tab = getActiveTab();
+  if (tab && tab.kernel === 'rammerhead') return 'Rammerhead 内核';
+  if (tab && tab.kernel === 'scramjet') return 'Scramjet 内核';
+  if (tab && tab.kernel === 'lite') return '轻量直连内核';
+  if (state.sj.ready) return 'Scramjet 内核';
+  if (state.rh.available) return 'Rammerhead 内核';
+  if (state.engineMode === 'scramjet') return 'Scramjet 内核启动中…';
+  return '轻量直连内核';
+}
+
+function updateEngineBadge() {
+  const badge = document.getElementById('engineBadge');
+  if (badge) badge.textContent = kernelLabelForActiveTab();
+  updateMenuEngineInfo();
+}
+
+// ---------------------------------------------------------------------------
+// Rammerhead 内核（HTTP 模式外网代理）：服务端会话式代理，不依赖
+// Service Worker。浏览器流程按 @rubynetwork/rammerhead 的约定：
+//   1) 种下 origin_proxy cookie，把外壳的真实源（协议+主机+端口）告诉
+//      服务端，服务端据此改写页面内指向代理自身的绝对地址；
+//   2) GET /newsession 取得 32 位会话 id（整个外壳共用一个会话，相当于
+//      一份浏览器配置，站点 Cookie 由服务端按会话隔离保存）；
+//   3) iframe 直接导航到 /<会话 id>/<目标网址>。
+// ---------------------------------------------------------------------------
+function canUseRammerhead(targetUrl) {
+  return state.rh.available && !isIntranetUrl(targetUrl);
+}
+
+function primeRammerheadCookies() {
+  try {
+    document.cookie = `origin_proxy=${encodeURIComponent(location.origin)}; path=/; SameSite=Lax`;
+    const token = sessionStorage.getItem('auroraToken');
+    if (token) {
+      document.cookie = `aurora_token=${encodeURIComponent(token)}; path=/; SameSite=Lax`;
+    }
+  } catch (e) {}
+}
+
+async function ensureRammerheadSession() {
+  if (state.rh.sessionId) return state.rh.sessionId;
+  if (state.rh.sessionPromise) return state.rh.sessionPromise;
+  state.rh.sessionPromise = (async () => {
+    primeRammerheadCookies();
+    const resp = await fetch('/newsession', { headers: authHeaders() });
+    if (!resp.ok) throw new Error('Rammerhead 会话创建失败: HTTP ' + resp.status);
+    const id = (await resp.text()).trim();
+    if (!/^[a-z0-9]{32}$/i.test(id)) throw new Error('Rammerhead 会话 id 无效');
+    state.rh.sessionId = id;
+    return id;
+  })().catch((err) => {
+    state.rh.sessionPromise = null;
+    throw err;
+  });
+  return state.rh.sessionPromise;
+}
+
 function loadScriptTag(src) {
   return new Promise((resolve, reject) => {
     const s = document.createElement('script');
@@ -1317,17 +1386,13 @@ async function bootScramjet() {
       }
     }, 15000);
 
-    const badge = document.getElementById('engineBadge');
-    if (badge) badge.textContent = 'Scramjet 内核';
-    updateMenuEngineInfo();
+    updateEngineBadge();
     console.log('[fn-browser] Scramjet 内核已就绪');
   })().catch((err) => {
     state.sj.ready = false;
     state.sj.controller = null;
-    const badge = document.getElementById('engineBadge');
-    if (badge) badge.textContent = '轻量直连内核';
-    updateMenuEngineInfo();
-    console.warn('[fn-browser] Scramjet 启动失败，外网页面回退轻量直连内核:', err);
+    updateEngineBadge();
+    console.warn('[fn-browser] Scramjet 启动失败，外网页面回退 Rammerhead / 轻量直连内核:', err);
   });
   return state.sj.bootPromise;
 }
@@ -1364,6 +1429,7 @@ function onScramjetUrlChange(tabId, url) {
 
 // 通过 Scramjet 帧导航（每个标签页复用同一个帧元素与 Frame 对象）
 function navigateWithScramjet(tab, pane, targetUrl) {
+  tab.kernel = 'scramjet';
   if (!tab.sjFrame) {
     pane.innerHTML = `<iframe class="proxy-frame" id="frame-${tab.id}"></iframe>`;
     const frameEl = document.getElementById(`frame-${tab.id}`);
@@ -1380,6 +1446,280 @@ function navigateWithScramjet(tab, pane, targetUrl) {
   tab.sjExpectUrl = targetUrl;
   tab.sjFrame.go(targetUrl);
   setTimeout(() => showLoading(false), 1500);
+}
+
+// 通过内置轻量直连代理导航（内网设备与双内核都不可用时的回退路径）
+async function navigateWithLite(tab, pane, targetUrl) {
+  tab.sjFrame = null;
+  tab.kernel = 'lite';
+  const proxySrc = await buildProxySrc(targetUrl);
+  pane.innerHTML = `<iframe class="proxy-frame" id="frame-${tab.id}" name="aurora-${tab.id}" src="${proxySrc}"></iframe>`;
+  applyZoom(tab);
+  const frame = document.getElementById(`frame-${tab.id}`);
+  frame.addEventListener('load', () => {
+    showLoading(false);
+    try {
+      const frameTitle = frame.contentDocument && frame.contentDocument.title;
+      if (frameTitle) {
+        tab.title = frameTitle;
+        renderTabStrip();
+      }
+    } catch {}
+  });
+}
+
+// hammerhead 的致命错误以纯文本小页面返回（与外壳同源、可读）：命中这些
+// 特征串视为 Rammerhead 导航失败，先换新会话重试一次，仍失败回退轻量直连
+const RH_ERROR_PAGE_RE =
+  /Failed to (find a DNS-record|perform a request|connect to the proxy host|authorize to the proxy|complete a request)|Cannot establish a tunnel|Session is not opened in proxy/;
+
+// 通过 Rammerhead 帧导航（会话失效/页面错误时自动回退轻量直连）
+async function navigateWithRammerhead(tab, pane, targetUrl, isRetry = false) {
+  let sessionId;
+  try {
+    sessionId = await ensureRammerheadSession();
+  } catch (err) {
+    console.warn('[fn-browser] Rammerhead 会话创建失败，回退轻量直连内核:', err);
+    return navigateWithLite(tab, pane, targetUrl);
+  }
+  tab.sjFrame = null;
+  tab.kernel = 'rammerhead';
+  tab.rhExpectUrl = targetUrl;
+  pane.innerHTML = `<iframe class="proxy-frame" id="frame-${tab.id}" name="aurora-${tab.id}" src="/${sessionId}/${targetUrl}"></iframe>`;
+  applyZoom(tab);
+  const frame = document.getElementById(`frame-${tab.id}`);
+  frame.addEventListener('load', () => {
+    showLoading(false);
+    if (tab.kernel !== 'rammerhead' || document.getElementById(`frame-${tab.id}`) !== frame) return;
+    let doc = null;
+    try {
+      doc = frame.contentDocument;
+    } catch {}
+    const bodyText = doc && doc.body ? doc.body.innerText || '' : '';
+    if (bodyText && bodyText.length < 4000 && RH_ERROR_PAGE_RE.test(bodyText)) {
+      if (!isRetry) {
+        // 会话可能已失效：丢弃旧会话，换新会话重试一次
+        state.rh.sessionId = null;
+        state.rh.sessionPromise = null;
+        navigateWithRammerhead(tab, pane, targetUrl, true);
+      } else {
+        console.warn('[fn-browser] Rammerhead 页面加载失败，回退轻量直连内核:', targetUrl);
+        navigateWithLite(tab, pane, targetUrl);
+      }
+      return;
+    }
+    if (doc && doc.title) {
+      tab.title = doc.title;
+      renderTabStrip();
+    }
+    syncRammerheadFrameUrl(tab, frame);
+    installRhPopupGuards(tab, frame);
+  });
+  startRammerheadWatcher(tab);
+}
+
+// Rammerhead 帧内导航（点击链接等）后，外壳无法从帧地址反推真实网址
+// （地址经会话字典打乱）。hammerhead 在页面内虚拟化了 location：同源父
+// 页面读到的 contentWindow.location.href 若已是真实网址则同步之；读到的
+// 仍是含会话 id 的打乱地址时忽略，保留用户输入/历史中的网址。
+function syncRammerheadFrameUrl(tab, frame) {
+  try {
+    const u = frame.contentWindow.location.href;
+    if (!u || !/^https?:\/\//i.test(u)) return;
+    if (state.rh.sessionId && u.includes(`/${state.rh.sessionId}/`)) return;
+    if (u === tab.url) return;
+    const isProgrammatic = tab.rhExpectUrl === u;
+    tab.rhExpectUrl = null;
+    if (!isProgrammatic) {
+      tab.history = tab.history.slice(0, tab.historyIndex + 1);
+      tab.history.push(u);
+      tab.historyIndex = tab.history.length - 1;
+    }
+    tab.url = u;
+    try {
+      tab.title = new URL(u).hostname;
+    } catch {}
+    renderTabStrip();
+    if (tab.id === state.activeTabId) syncToolbarWithActiveTab();
+    if (!isProgrammatic) {
+      fetch('/api/history', {
+        method: 'POST',
+        headers: authHeaders({ 'Content-Type': 'application/json' }),
+        body: JSON.stringify({ title: tab.title, url: u })
+      }).catch(() => {});
+    }
+  } catch {}
+}
+
+// 轮询 Rammerhead 帧的标题与（可读时的）真实网址，保持标签与地址栏同步
+function startRammerheadWatcher(tab) {
+  stopRammerheadWatcher(tab);
+  tab.rhWatchTimer = setInterval(() => {
+    if (tab.kernel !== 'rammerhead') {
+      stopRammerheadWatcher(tab);
+      return;
+    }
+    const frame = document.getElementById(`frame-${tab.id}`);
+    if (!frame) return;
+    try {
+      const doc = frame.contentDocument;
+      if (doc && doc.title && doc.title !== tab.title) {
+        tab.title = doc.title;
+        renderTabStrip();
+      }
+    } catch {}
+    syncRammerheadFrameUrl(tab, frame);
+  }, 1200);
+}
+
+function stopRammerheadWatcher(tab) {
+  if (tab && tab.rhWatchTimer) {
+    clearInterval(tab.rhWatchTimer);
+    tab.rhWatchTimer = null;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Rammerhead 弹窗拦截：被代理页面里的新窗口导航（target=_blank 链接、
+// Ctrl/中键点击、window.open）会被 hammerhead 虚拟化成真实浏览器窗口，
+// 逃出外壳（用户实测：必应「视频」页签点开后弹出裸会话地址的独立窗口）。
+// 双层拦截：
+//   1) 页面内桥接脚本（服务端注入每个被代理页面，/aurora-rh-bridge.js）
+//      在捕获阶段拦截手势，postMessage 通知外壳改开新标签页；
+//   2) 外壳侧守卫（帧同源可达）：加载完成后包装 contentWindow.open——
+//      外壳安装得最晚，位于页面内一切包装的外层；捕获阶段点击监听仅在
+//      桥接脚本缺席时补装，避免双份监听。
+// 外壳对同一 URL 的打开请求做 1.2 秒去重，防止两层（或点击与 open 连锁）
+// 重复开页。
+// ---------------------------------------------------------------------------
+const RH_SESSION_PATH_RE = /^\/[a-z0-9]{32}\//i;
+let lastRhOpenUrl = '';
+let lastRhOpenAt = 0;
+
+function handleRhOpenRequest(rawUrl) {
+  if (!rawUrl) return;
+  const now = Date.now();
+  if (rawUrl === lastRhOpenUrl && now - lastRhOpenAt < 1200) return;
+  lastRhOpenUrl = rawUrl;
+  lastRhOpenAt = now;
+  let u;
+  try {
+    u = new URL(rawUrl);
+  } catch {
+    return;
+  }
+  if (u.origin === location.origin && RH_SESSION_PATH_RE.test(u.pathname)) {
+    // 已被 hammerhead 改写的会话地址：新标签页的帧直接加载该地址，
+    // 在同一会话内打开（Cookie/登录态与来源标签页共享）
+    openRammerheadTab(u.pathname + u.search + u.hash);
+  } else if (/^https?:\/\//i.test(u.href)) {
+    // 原始外网地址（window.open 的入参等）：走常规新标签页导航
+    createTab(u.href);
+  }
+}
+
+// 以「已改写的 Rammerhead 会话地址」直接开一个新标签页（弹窗链接专用）
+function openRammerheadTab(sessionPath) {
+  const id = 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+  const fullUrl = location.origin + sessionPath;
+  const tab = {
+    id,
+    title: '新标签页',
+    url: fullUrl,
+    history: [fullUrl],
+    historyIndex: 0,
+    zoom: 1,
+    kernel: 'rammerhead',
+    rhWatchTimer: null
+  };
+  state.tabs.push(tab);
+
+  const pane = document.createElement('div');
+  pane.className = 'tab-pane';
+  pane.id = `pane-${id}`;
+  document.getElementById('viewportContainer').appendChild(pane);
+
+  switchTab(id);
+  showLoading(true);
+  pane.innerHTML = `<iframe class="proxy-frame" id="frame-${id}" name="aurora-${id}" src="${escapeHtml(sessionPath)}"></iframe>`;
+  applyZoom(tab);
+  const frame = document.getElementById(`frame-${id}`);
+  frame.addEventListener('load', () => {
+    showLoading(false);
+    if (tab.kernel !== 'rammerhead' || document.getElementById(`frame-${id}`) !== frame) return;
+    try {
+      const doc = frame.contentDocument;
+      if (doc && doc.title) {
+        tab.title = doc.title;
+        renderTabStrip();
+      }
+    } catch {}
+    syncRammerheadFrameUrl(tab, frame);
+    installRhPopupGuards(tab, frame);
+  });
+  startRammerheadWatcher(tab);
+  updateEngineBadge();
+  return id;
+}
+
+// 判断一次点击是否为「应改开新标签页」的新窗口手势（与桥接脚本同规则）
+function rhPopupAnchor(e) {
+  const t = e.target;
+  const a = t && t.closest ? t.closest('a[href], area[href]') : null;
+  if (!a) return null;
+  const raw = a.getAttribute('href') || '';
+  if (/^(javascript:|data:|blob:|mailto:|tel:|#)/i.test(raw)) return null;
+  const targetAttr = (a.getAttribute('target') || '').toLowerCase();
+  if (targetAttr === '_blank' || e.button === 1 || e.ctrlKey || e.metaKey) return a;
+  return null;
+}
+
+// 外壳侧弹窗守卫：open 包装始终补装（安装时机最晚，能盖住页面内的包装）；
+// 点击监听仅在页面内桥接脚本缺席时补装
+function installRhPopupGuards(tab, frame) {
+  let win = null;
+  let doc = null;
+  try {
+    win = frame.contentWindow;
+    doc = frame.contentDocument;
+  } catch {}
+  if (!win || !doc) return;
+
+  try {
+    if (!win.__auroraOpenWrapped) {
+      win.__auroraOpenWrapped = true;
+      const nativeOpen = win.open;
+      win.open = function (url) {
+        if (url != null && String(url) !== '') {
+          let resolved = String(url);
+          try {
+            resolved = new URL(resolved, win.location.href).href;
+          } catch {}
+          handleRhOpenRequest(resolved);
+          return null;
+        }
+        return nativeOpen ? nativeOpen.apply(win, arguments) : null;
+      };
+    }
+  } catch {}
+
+  try {
+    if (!win.__auroraRhBridge && !doc.__auroraClickGuard) {
+      doc.__auroraClickGuard = true;
+      doc.addEventListener(
+        'click',
+        (e) => {
+          const a = rhPopupAnchor(e);
+          if (!a) return;
+          e.preventDefault();
+          e.stopPropagation();
+          if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+          if (a.href) handleRhOpenRequest(a.href);
+        },
+        true
+      );
+    }
+  } catch {}
 }
 
 // 主题应用
@@ -1452,7 +1792,9 @@ function createTab(initialUrl = 'fn://newtab') {
     url: initialUrl,
     history: [initialUrl],
     historyIndex: 0,
-    zoom: 1
+    zoom: 1,
+    kernel: null,
+    rhWatchTimer: null
   };
   state.tabs.push(tab);
 
@@ -1472,6 +1814,7 @@ function closeTab(id, e) {
   const idx = state.tabs.findIndex((t) => t.id === id);
   if (idx === -1) return;
 
+  stopRammerheadWatcher(state.tabs[idx]);
   state.tabs.splice(idx, 1);
   const pane = document.getElementById(`pane-${id}`);
   if (pane) pane.remove();
@@ -1499,6 +1842,7 @@ function switchTab(id) {
   syncToolbarWithActiveTab();
   syncZoomIndicators();
   resetFindState();
+  updateEngineBadge();
 }
 
 function getActiveTab() {
@@ -1523,10 +1867,13 @@ async function navigateTab(id, rawInput, skipHistoryPush = false) {
 
   if (targetUrl === 'fn://newtab') {
     tab.title = '新标签页';
+    tab.kernel = null;
+    stopRammerheadWatcher(tab);
     renderNewTabPage(pane, id);
     applyZoom(tab);
     renderTabStrip();
     syncToolbarWithActiveTab();
+    updateEngineBadge();
     return;
   }
 
@@ -1541,26 +1888,16 @@ async function navigateTab(id, rawInput, skipHistoryPush = false) {
   showLoading(true);
 
   if (canUseScramjet(targetUrl)) {
-    // 外网页面走 Scramjet 内核
+    // 外网页面走 Scramjet 内核（安全上下文且内核已就绪）
     navigateWithScramjet(tab, pane, targetUrl);
+  } else if (canUseRammerhead(targetUrl)) {
+    // HTTP 打开方式（或 Scramjet 启动失败）：外网页面走 Rammerhead 内核
+    await navigateWithRammerhead(tab, pane, targetUrl);
   } else {
-    // 内网设备 / Scramjet 未就绪：走内置轻量直连代理
-    tab.sjFrame = null;
-    const proxySrc = await buildProxySrc(targetUrl);
-    pane.innerHTML = `<iframe class="proxy-frame" id="frame-${id}" name="aurora-${id}" src="${proxySrc}"></iframe>`;
-    applyZoom(tab);
-    const frame = document.getElementById(`frame-${id}`);
-    frame.addEventListener('load', () => {
-      showLoading(false);
-      try {
-        const frameTitle = frame.contentDocument && frame.contentDocument.title;
-        if (frameTitle) {
-          tab.title = frameTitle;
-          renderTabStrip();
-        }
-      } catch {}
-    });
+    // 内网设备 / 双内核均不可用：走内置轻量直连代理
+    await navigateWithLite(tab, pane, targetUrl);
   }
+  updateEngineBadge();
 
   // 记录历史
   fetch('/api/history', {
@@ -2301,12 +2638,7 @@ document.getElementById('findInput').addEventListener('input', () => {
 function updateMenuEngineInfo() {
   const el = document.getElementById('menuEngineInfo');
   if (!el) return;
-  const engineName = state.sj.ready
-    ? 'Scramjet 内核'
-    : state.engineMode === 'scramjet'
-      ? 'Scramjet 内核（启动中或已回退轻量直连）'
-      : '轻量直连内核';
-  el.textContent = `当前内核：${engineName}`;
+  el.textContent = `当前内核：${kernelLabelForActiveTab()}`;
 }
 
 function toggleMenu(force) {
@@ -2503,6 +2835,19 @@ window.addEventListener('message', (event) => {
   }
 });
 
+// 监听 Rammerhead 页面内桥接脚本的「新窗口改开标签页」请求：
+// 仅接受同源、且确实来自某个标签页帧的消息
+window.addEventListener('message', (event) => {
+  if (!event.data || event.data.source !== 'fn-browser-rh' || event.data.type !== 'open') return;
+  if (event.origin !== location.origin) return;
+  const fromKnownFrame = state.tabs.some((t) => {
+    const f = document.getElementById(`frame-${t.id}`);
+    return f && f.contentWindow === event.source;
+  });
+  if (!fromKnownFrame) return;
+  handleRhOpenRequest(event.data.url);
+});
+
 // 快捷键支持
 window.addEventListener('keydown', (e) => {
   const mod = e.ctrlKey || e.metaKey;
@@ -2581,12 +2926,13 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
     ]);
     const status = await statusResp.json();
     state.engineMode = status.engine || 'lite';
+    state.rh.available = !!status.rammerhead;
     const badge = document.getElementById('engineBadge');
-    badge.textContent = state.engineMode === 'scramjet' ? 'Scramjet 内核启动中…' : '轻量直连内核';
     badge.title = `内存占用: ${status.memoryMB} MB`;
+    updateEngineBadge();
     const info = document.getElementById('menuEngineInfo');
     if (info) {
-      info.textContent = `内核：${state.engineMode === 'scramjet' ? 'Scramjet（启动中…）' : '轻量直连'} · 版本 ${status.version} · 内存 ${status.memoryMB} MB`;
+      info.textContent = `内核：${kernelLabelForActiveTab()} · 版本 ${status.version} · 内存 ${status.memoryMB} MB`;
     }
     if (state.engineMode === 'scramjet') {
       bootScramjet();

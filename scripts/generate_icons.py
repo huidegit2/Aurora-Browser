@@ -31,6 +31,37 @@ def chunk(tag: bytes, data: bytes) -> bytes:
     )
 
 
+def with_color_chunks(data: bytes) -> bytes:
+    """Insert standard sRGB + gAMA chunks immediately after IHDR.
+
+    A bare IHDR/IDAT-only PNG is valid, but some minimal icon pipelines
+    (fnOS's app-center renderer among them) silently ignore profile-less
+    files and show a placeholder. Icons produced by common encoders —
+    including the official fnpack template's — always carry sRGB/gAMA,
+    so mirror that layout. Idempotent: a file that already has an sRGB
+    chunk is returned unchanged.
+    """
+    if not data.startswith(PNG_SIG):
+        return data
+    pos = 8
+    tags: list[bytes] = []
+    ihdr_end: int | None = None
+    while pos < len(data):
+        length = struct.unpack(">I", data[pos : pos + 4])[0]
+        tag = data[pos + 4 : pos + 8]
+        tags.append(tag)
+        pos += 12 + length
+        if tag == b"IHDR":
+            ihdr_end = pos
+        if tag == b"IEND":
+            break
+    if ihdr_end is None or b"sRGB" in tags:
+        return data
+    srgb = chunk(b"sRGB", b"\x00")  # rendering intent: perceptual
+    gama = chunk(b"gAMA", struct.pack(">I", 45455))  # gamma 1/2.2
+    return data[:ihdr_end] + srgb + gama + data[ihdr_end:]
+
+
 def extract_png() -> bytes:
     """Read the embedded PNG from the SVG data URI."""
     with open(SVG_PATH, "rb") as fh:
@@ -141,7 +172,7 @@ def box_downscale(
 def encode_png(width: int, height: int, rows: list[bytes]) -> bytes:
     ihdr = struct.pack(">IIBBBBB", width, height, 8, 6, 0, 0, 0)
     raw = b"".join(b"\x00" + row for row in rows)
-    return (
+    return with_color_chunks(
         PNG_SIG
         + chunk(b"IHDR", ihdr)
         + chunk(b"IDAT", zlib.compress(raw, 9))
@@ -164,7 +195,9 @@ def main() -> None:
         raise SystemExit(f"SVG 内嵌 PNG 尺寸应为 256x256，实际为 {width}x{height}")
 
     print("从 assets/icon.svg 生成图标：")
-    # The embedded 256 image is authoritative; keep it byte-for-byte.
+    # The embedded 256 image is authoritative; keep its pixels byte-for-byte
+    # (only the standard sRGB/gAMA chunks are spliced in after IHDR).
+    png = with_color_chunks(png)
     write("ICON_256.PNG", png)
     write("app/ui/images/icon_256.png", png)
 
