@@ -2,7 +2,8 @@
 
 ## [Unreleased]
 
-- 新增可编辑的矢量图标源 `assets/icon.svg`，与 `scripts/generate_icons.py` 生成的 PNG 图案一致。
+- 图标替换为定稿的「极光球」设计：四张 PNG 全部由 `assets/icon.svg` 内嵌的 256×256 原图生成，直角方形满幅、无圆角。
+- `scripts/generate_icons.py` 改为直接读取 SVG 内嵌 PNG 并用纯标准库做高质量缩放，构建时不再重新绘制旧图案。
 
 ## [1.0.3] - 2026-11-24
 

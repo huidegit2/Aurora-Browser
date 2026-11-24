@@ -31,7 +31,7 @@
 
 内部 `appname` 固定为 `fn-browser`，保证老版本覆盖升级；应用中心显示名为「极光」。
 
-可编辑的矢量设计源是 `assets/icon.svg`；`scripts/generate_icons.py` 生成实际入库的 PNG（纯标准库，可复现，不依赖渲染器）：`ICON.PNG` 64×64、`ICON_256.PNG` 256×256、`app/ui/images/icon_64.png`、`icon_256.png`。两者图案一致，改设计优先改 SVG，然后用 Inkscape/CairoSVG 导出 PNG 覆盖。fnpack 会在打包前强制校验这四个 PNG 以及 `cmd/`、`config/`、`wizard/` 目录。
+图标唯一来源是 `assets/icon.svg`（定稿的极光球，内嵌 256×256 PNG）。`scripts/generate_icons.py` 从 SVG 提取原图并生成四张入库 PNG（纯标准库，可复现，不依赖渲染器）：`ICON.PNG` 64×64、`ICON_256.PNG` 256×256、`app/ui/images/icon_64.png`、`icon_256.png`。改图标只需替换 SVG 内嵌的 256×256 PNG，然后运行 `python3 scripts/generate_icons.py`，不要手改生成的 PNG。fnpack 会在打包前强制校验这四个 PNG 以及 `cmd/`、`config/`、`wizard/` 目录。
 
 ## 自动构建与发布
 
