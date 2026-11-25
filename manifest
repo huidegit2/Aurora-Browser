@@ -1,7 +1,7 @@
 appname               = fn-browser
 version               = 1.0.6
-display_name          = 极光
-desc                  = 极光 Aurora · 飞牛 fnOS 原生网页代理浏览器，支持多标签页、书签/历史与内网设备快捷访问；提供 ARM64 与 x86_64 双架构包。
+display_name          = 极光浏览器
+desc                  = 极光浏览器 Aurora · 飞牛 fnOS 原生网页代理浏览器，支持多标签页、书签/历史与内网设备快捷访问；提供 ARM64 与 x86_64 双架构包。
 platform              = arm
 source                = thirdparty
 maintainer            = huidegit2
