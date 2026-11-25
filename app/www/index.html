@@ -1335,6 +1335,33 @@
     gap: 8px;
   }
   .fs-err { font-size: 11.5px; color: #e5484d; flex: 1; }
+  .omnibox-lock {
+    width: 24px;
+    height: 24px;
+    border-radius: 999px;
+    border: none;
+    background: transparent;
+    color: var(--text-muted);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    flex-shrink: 0;
+    margin-left: 4px;
+  }
+  .omnibox-lock:hover { background: var(--bg-tab); color: var(--text); }
+  .omnibox-lock.secure { color: #00b42a; }
+  .omnibox-lock.warn { color: #f59e0b; }
+  .tab-spinner {
+    width: 13px;
+    height: 13px;
+    border: 2px solid var(--border);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: auroraSpin 0.7s linear infinite;
+    display: inline-block;
+  }
+  @keyframes auroraSpin { to { transform: rotate(360deg); } }
 </style>
 </head>
 <body>
@@ -1360,6 +1387,9 @@
     </button>
 
     <div class="omnibox" id="omnibox">
+      <button class="omnibox-lock" id="omniboxLockBtn" type="button" title="连接与内核状态">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><circle cx="12" cy="8" r="0.5" fill="currentColor"/></svg>
+      </button>
       <input
         type="text"
         class="url-input"
@@ -1427,6 +1457,18 @@
     <button class="find-btn" id="findPrevBtn" title="上一个 (Shift+Enter)">↑</button>
     <button class="find-btn" id="findNextBtn" title="下一个 (Enter)">↓</button>
     <button class="find-btn" id="findCloseBtn" title="关闭 (Esc)">×</button>
+  </div>
+
+  <!-- 标签页右键菜单 -->
+  <div class="menu-popup" id="tabContextMenu" style="width:190px;z-index:220;">
+    <button class="menu-item" data-tab-act="reload"><span>重新加载</span></button>
+    <button class="menu-item" data-tab-act="duplicate"><span>复制标签页</span></button>
+    <div class="menu-sep"></div>
+    <button class="menu-item" data-tab-act="close"><span>关闭标签页</span><span class="menu-key">Ctrl+W</span></button>
+    <button class="menu-item" data-tab-act="close-others"><span>关闭其他标签页</span></button>
+    <button class="menu-item" data-tab-act="close-right"><span>关闭右侧标签页</span></button>
+    <div class="menu-sep"></div>
+    <button class="menu-item" data-tab-act="reopen"><span>恢复关闭的标签页</span></button>
   </div>
 
   <!-- 主菜单（一级菜单） -->
@@ -1812,9 +1854,17 @@ async function bootScramjet() {
     });
     await navigator.serviceWorker.ready;
     if (!navigator.serviceWorker.controller) {
-      await new Promise((resolve) =>
-        navigator.serviceWorker.addEventListener('controllerchange', resolve, { once: true })
-      );
+      await new Promise((resolve) => {
+        const t = setTimeout(resolve, 4000);
+        navigator.serviceWorker.addEventListener(
+          'controllerchange',
+          () => {
+            clearTimeout(t);
+            resolve();
+          },
+          { once: true }
+        );
+      });
     }
     const serviceworker = navigator.serviceWorker.controller || registration.active;
     if (!serviceworker) throw new Error('Service Worker 未能激活');
@@ -2227,6 +2277,13 @@ async function navigateTab(id, rawInput, skipHistoryPush = false) {
   syncToolbarWithActiveTab();
   showLoading(true);
 
+  if (window.isSecureContext && state.engineMode === 'scramjet' && !state.sj.ready) {
+    await Promise.race([
+      bootScramjet(),
+      new Promise((r) => setTimeout(r, 4500))
+    ]);
+  }
+
   if (canUseScramjet(targetUrl)) {
     // 外网页面走 Scramjet 内核（安全上下文且内核已就绪）
     navigateWithScramjet(tab, pane, targetUrl);
@@ -2248,6 +2305,13 @@ function showLoading(active) {
   const bar = document.getElementById('loadingBar');
   const statusText = document.getElementById('statusText');
   const tab = getActiveTab();
+  if (tab) {
+    const nextLoading = Boolean(active) && tab.url !== 'fn://newtab';
+    if (tab.loading !== nextLoading) {
+      tab.loading = nextLoading;
+      renderTabStrip();
+    }
+  }
   if (active) {
     bar.classList.add('active');
     if (statusText && tab && tab.url !== 'fn://newtab') {
@@ -2265,8 +2329,11 @@ function showLoading(active) {
   }
 }
 
-// 标签页图标：真实站点 favicon（经代理取回），失败回退彩色字母块
+// 标签页图标：加载中显示旋转圆环，否则显示站点 favicon，失败回退彩色字母块
 function tabFavHtml(tab) {
+  if (tab.loading) {
+    return '<span class="tab-spinner"></span>';
+  }
   if (tab.url === 'fn://newtab') {
     return '<span class="tab-dot"></span>';
   }
@@ -2313,6 +2380,11 @@ function renderTabStrip() {
       <button class="tab-close" title="关闭 (Ctrl+W)">×</button>
     `;
     el.addEventListener('click', () => switchTab(tab.id));
+    el.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      openTabContextMenu(tab.id, e.clientX, e.clientY);
+    });
     el.addEventListener('auxclick', (e) => {
       if (e.button === 1) closeTab(tab.id, e);
     });
@@ -2385,6 +2457,23 @@ function syncToolbarWithActiveTab() {
   const starBtn = document.getElementById('starBtn');
   starBtn.textContent = isStarred ? '★' : '☆';
   starBtn.classList.toggle('starred', isStarred);
+
+  const lockBtn = document.getElementById('omniboxLockBtn');
+  if (lockBtn) {
+    const isNewTab = tab.url === 'fn://newtab';
+    const secure = !isNewTab && window.isSecureContext && tab.kernel === 'scramjet';
+    const warn = !isNewTab && !window.isSecureContext;
+    lockBtn.classList.toggle('secure', secure);
+    lockBtn.classList.toggle('warn', warn);
+    lockBtn.title = isNewTab
+      ? '新标签页'
+      : secure
+        ? '安全上下文 · Scramjet 满血内核（点击运行连接自检）'
+        : '当前使用轻量直连或非安全上下文（点击运行连接自检）';
+    lockBtn.innerHTML = secure
+      ? '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg>'
+      : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><circle cx="12" cy="8" r="0.5" fill="currentColor"/></svg>';
+  }
 
   const statusText = document.getElementById('statusText');
   if (statusText && !document.getElementById('loadingBar').classList.contains('active')) {
@@ -3548,7 +3637,45 @@ document.getElementById('menuPopup').addEventListener('click', (e) => {
   toggleMenu(false);
 });
 
+let ctxTabId = null;
+function openTabContextMenu(tabId, x, y) {
+  ctxTabId = tabId;
+  const menu = document.getElementById('tabContextMenu');
+  if (!menu) return;
+  menu.style.left = `${Math.min(x, window.innerWidth - 200)}px`;
+  menu.style.top = `${Math.min(y, window.innerHeight - 220)}px`;
+  menu.style.right = 'auto';
+  menu.classList.add('open');
+}
+
+function closeTabContextMenu() {
+  const menu = document.getElementById('tabContextMenu');
+  if (menu) menu.classList.remove('open');
+}
+
+document.getElementById('tabContextMenu').addEventListener('click', (e) => {
+  const btn = e.target.closest('[data-tab-act]');
+  if (!btn || !ctxTabId) return;
+  const act = btn.getAttribute('data-tab-act');
+  const tab = state.tabs.find((t) => t.id === ctxTabId);
+  closeTabContextMenu();
+  if (!tab && act !== 'reopen') return;
+  if (act === 'reload') navigateTab(tab.id, tab.url, true);
+  else if (act === 'duplicate') createTab(tab.url);
+  else if (act === 'close') closeTab(tab.id);
+  else if (act === 'close-others') {
+    state.tabs.filter((t) => t.id !== tab.id).forEach((t) => closeTab(t.id));
+  } else if (act === 'close-right') {
+    const idx = state.tabs.findIndex((t) => t.id === tab.id);
+    if (idx !== -1) state.tabs.slice(idx + 1).forEach((t) => closeTab(t.id));
+  } else if (act === 'reopen') reopenLastClosedTab();
+});
+
 document.addEventListener('click', (e) => {
+  const tabMenu = document.getElementById('tabContextMenu');
+  if (tabMenu && tabMenu.classList.contains('open') && !tabMenu.contains(e.target)) {
+    closeTabContextMenu();
+  }
   const menu = document.getElementById('menuPopup');
   if (menu.classList.contains('open') && !menu.contains(e.target) && e.target.id !== 'menuBtn') {
     toggleMenu(false);
@@ -3603,15 +3730,72 @@ document.getElementById('homeBtn').onclick = () => {
 };
 
 const urlInputEl = document.getElementById('urlInput');
+let omniComposing = false;
+let omniSelectOnMouseUp = false;
+let omniLastTyped = '';
+
+function findInlineSuggestion(raw) {
+  if (!raw || /\s/.test(raw)) return null;
+  const q = raw.toLowerCase();
+  const candidates = [];
+  state.bookmarks.forEach((b) => candidates.push(b.url));
+  state.historyCache.forEach((h) => candidates.push(h.url));
+  for (const url of candidates) {
+    if (!url || !/^https?:\/\//i.test(url)) continue;
+    const stripped = url.replace(/^https?:\/\//i, '').replace(/^www\./i, '');
+    const strippedNoSlash = stripped.replace(/\/$/, '');
+    if (url.toLowerCase().startsWith(q) && url.length > raw.length) {
+      return { completed: raw + url.slice(raw.length), target: url };
+    }
+    if (stripped.toLowerCase().startsWith(q) && strippedNoSlash.length > raw.length) {
+      return { completed: raw + strippedNoSlash.slice(raw.length), target: url };
+    }
+  }
+  return null;
+}
+
+document.getElementById('omniboxLockBtn').onclick = () => openDiagnosticsModal();
+
+urlInputEl.addEventListener('compositionstart', () => {
+  omniComposing = true;
+});
+urlInputEl.addEventListener('compositionend', () => {
+  omniComposing = false;
+  if (document.activeElement === urlInputEl) openOmniDropdown();
+});
 urlInputEl.addEventListener('focus', () => {
+  omniSelectOnMouseUp = true;
+  urlInputEl.select();
+  openOmniDropdown();
   refreshHistoryCache().then(() => {
-    if (document.activeElement === urlInputEl) openOmniDropdown();
+    if (document.activeElement === urlInputEl && !omniComposing) {
+      omni.items = buildOmniItems(urlInputEl.value);
+      renderOmniDropdown();
+    }
   });
 });
-urlInputEl.addEventListener('input', () => {
+urlInputEl.addEventListener('mouseup', (e) => {
+  if (omniSelectOnMouseUp) {
+    omniSelectOnMouseUp = false;
+    e.preventDefault();
+  }
+});
+urlInputEl.addEventListener('input', (e) => {
+  if (omniComposing) return;
+  const val = urlInputEl.value;
+  const isDelete = e.inputType && e.inputType.startsWith('delete');
+  omniLastTyped = val;
+  if (!isDelete && val && urlInputEl.selectionStart === val.length) {
+    const sug = findInlineSuggestion(val);
+    if (sug) {
+      urlInputEl.value = sug.completed;
+      urlInputEl.setSelectionRange(val.length, sug.completed.length);
+    }
+  }
   if (omni.open || document.activeElement === urlInputEl) openOmniDropdown();
 });
 urlInputEl.addEventListener('blur', () => {
+  omniSelectOnMouseUp = false;
   setTimeout(() => closeOmniDropdown(), 120);
 });
 urlInputEl.addEventListener('keydown', (e) => {
@@ -3619,10 +3803,14 @@ urlInputEl.addEventListener('keydown', (e) => {
     e.preventDefault();
     omni.open = true;
     omni.selected = omni.selected >= omni.items.length - 1 ? 0 : omni.selected + 1;
+    const item = omni.items[omni.selected];
+    if (item && item.target) urlInputEl.value = item.target;
     renderOmniDropdown();
   } else if (e.key === 'ArrowUp' && omni.items.length) {
     e.preventDefault();
     omni.selected = omni.selected <= 0 ? omni.items.length - 1 : omni.selected - 1;
+    const item = omni.items[omni.selected];
+    if (item && item.target) urlInputEl.value = item.target;
     renderOmniDropdown();
   } else if (e.key === 'Enter') {
     const tab = getActiveTab();

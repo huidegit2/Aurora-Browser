@@ -4,6 +4,14 @@
 // 其余请求（外壳、API、轻量代理）一律放行给网络。
 importScripts('/controller/controller.sw.js');
 
+self.addEventListener('install', () => {
+    self.skipWaiting();
+});
+
+self.addEventListener('activate', (event) => {
+    event.waitUntil(self.clients.claim());
+});
+
 self.addEventListener('fetch', (event) => {
     if ($scramjetController.shouldRoute(event)) {
         event.respondWith($scramjetController.route(event));
