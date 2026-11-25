@@ -127,6 +127,22 @@
               "size": 44027469
             }
           }
+        },
+        "1.0.21": {
+          "changelog": "### 优化\n\n- **菜单二级化与独立「设置」中心**：精简右上角主菜单为常用高频操作，新增二级「设置」弹窗，将搜索引擎、界面主题（跟随系统/浅色/深色）、访问密码保护、NAS 下载目录设置、HTTPS 证书下载与连接自检统一收纳其中。",
+          "updated_at": "2026-11-25T09:31:27+00:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.21/fn-browser-arm64.fpk",
+              "sha256": "4f83dca355a873627c1807b7415792fd5190f272906cc64099170e2361c242fa",
+              "size": 43988638
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.21/fn-browser-x86_64.fpk",
+              "sha256": "7a5a31beb22f30f4ccf610c48216c6c7ec0f4007bb19d01d2f22382d445f9641",
+              "size": 44025411
+            }
+          }
         }
       }
     }
