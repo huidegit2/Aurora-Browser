@@ -1101,6 +1101,40 @@ async function handleApi(req, res, pathname, parsedUrl) {
                 dirs
             });
         } catch (err) {
+            // 飞牛以独立低权限用户运行，/vol1 等根目录可能拒绝 scandir (EACCES)，
+            // 但其下的授权子目录（如 /vol1/1000、TRIM_DATA_SHARE_PATHS）可能可访问
+            if (err && (err.code === 'EACCES' || err.code === 'EPERM')) {
+                const probeDirs = [];
+                const seenProbe = new Set();
+                const tryProbe = (p, label) => {
+                    const resolved = path.resolve(p);
+                    if (seenProbe.has(resolved)) return;
+                    if (resolved !== target && !resolved.startsWith(target + path.sep) && target !== '/') return;
+                    try {
+                        if (fs.statSync(resolved).isDirectory()) {
+                            seenProbe.add(resolved);
+                            probeDirs.push({ name: label || path.basename(resolved) || resolved, path: resolved, writable: isDirWritable(resolved) });
+                        }
+                    } catch {}
+                };
+                String(process.env.TRIM_DATA_SHARE_PATHS || '')
+                    .split(':')
+                    .map((s) => s.trim())
+                    .filter(Boolean)
+                    .forEach((p) => tryProbe(p));
+                tryProbe(path.join(target, '1000'), '1000 (默认用户目录)');
+                tryProbe(path.join(target, '1000', 'Downloads'), '1000/Downloads');
+                tryProbe(path.join(target, '1000', 'Download'), '1000/Download');
+
+                const parent = path.dirname(target);
+                return sendJson(res, 200, {
+                    dir: target,
+                    parent: parent !== target ? parent : null,
+                    writable: false,
+                    restricted: true,
+                    dirs: probeDirs
+                });
+            }
             return sendJson(res, 400, { error: `无法读取目录: ${err.message}` });
         }
     }
