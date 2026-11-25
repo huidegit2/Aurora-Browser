@@ -20,12 +20,34 @@ const APP_VERSION = (() => {
     }
 })();
 
-const AUTH_TOKEN = process.env.AUTH_TOKEN || '';
+const ENV_AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 const TOKEN_PARAM = '_aurora_token';
 const SESSION_COOKIE_NAME = 'aurora_session';
-const SESSION_COOKIE_VAL = AUTH_TOKEN
-    ? crypto.createHmac('sha256', AUTH_TOKEN).update('aurora-session-v1').digest('hex')
-    : '';
+let activeAuthToken = ENV_AUTH_TOKEN;
+
+function sessionCookieFor(secret) {
+    if (!secret) return '';
+    return crypto.createHmac('sha256', secret).update('aurora-session-v1').digest('hex');
+}
+
+function buildSessionCookieHeader(req, secret) {
+    const isHttps = Boolean(req.socket && req.socket.encrypted) || req.headers['x-forwarded-proto'] === 'https';
+    if (!secret) {
+        return [`${SESSION_COOKIE_NAME}=`, 'HttpOnly', 'SameSite=Lax', 'Path=/', 'Max-Age=0', isHttps ? 'Secure' : '']
+            .filter(Boolean)
+            .join('; ');
+    }
+    return [
+        `${SESSION_COOKIE_NAME}=${encodeURIComponent(sessionCookieFor(secret))}`,
+        'HttpOnly',
+        'SameSite=Lax',
+        'Path=/',
+        'Max-Age=2592000',
+        isHttps ? 'Secure' : ''
+    ]
+        .filter(Boolean)
+        .join('; ');
+}
 
 function getCookie(req, name) {
     const raw = req.headers.cookie || '';
@@ -41,11 +63,16 @@ function getCookie(req, name) {
 }
 
 function isAuthorized(req, parsedUrl) {
-    if (!AUTH_TOKEN) return true;
+    if (!activeAuthToken) return true;
     const headerToken = req.headers['x-aurora-token'];
     const queryToken = parsedUrl && parsedUrl.searchParams ? parsedUrl.searchParams.get(TOKEN_PARAM) : null;
     const cookieVal = getCookie(req, SESSION_COOKIE_NAME);
-    return headerToken === AUTH_TOKEN || queryToken === AUTH_TOKEN || (SESSION_COOKIE_VAL && cookieVal === SESSION_COOKIE_VAL);
+    const expected = sessionCookieFor(activeAuthToken);
+    return (
+        headerToken === activeAuthToken ||
+        queryToken === activeAuthToken ||
+        (expected && cookieVal === expected)
+    );
 }
 
 const PORT = parseInt(process.env.PORT || '18920', 10);
@@ -87,7 +114,10 @@ const DEFAULT_SETTINGS = {
 
 readJson(BOOKMARKS_FILE, DEFAULT_BOOKMARKS);
 readJson(HISTORY_FILE, []);
-readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+const initSettings = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+if (!ENV_AUTH_TOKEN && initSettings.authPassword) {
+    activeAuthToken = String(initSettings.authPassword);
+}
 readJson(DOWNLOADS_FILE, []);
 
 const tlsManager = createTlsManager({
@@ -226,25 +256,35 @@ function parseBody(req) {
 }
 
 async function handleApi(req, res, pathname, parsedUrl) {
-    // 鉴权交换 HttpOnly 会话 Cookie
+    // 查询是否开启了访问密码（免鉴权）
+    if (pathname === '/api/auth/status' && req.method === 'GET') {
+        return sendJson(res, 200, {
+            authRequired: Boolean(activeAuthToken),
+            envLocked: Boolean(ENV_AUTH_TOKEN),
+            authenticated: isAuthorized(req, parsedUrl)
+        });
+    }
+
+    // 鉴权交换 HttpOnly 会话 Cookie（支持请求头、URL 参数或表单密码）
     if (pathname === '/api/auth/session' && req.method === 'POST') {
-        if (!isAuthorized(req, parsedUrl)) {
-            return sendJson(res, 401, { error: 'Unauthorized' });
+        let bodyPass = '';
+        try {
+            const body = await parseBody(req);
+            if (body && typeof body.password === 'string') bodyPass = body.password;
+        } catch {}
+        const ok = isAuthorized(req, parsedUrl) || (activeAuthToken && bodyPass === activeAuthToken);
+        if (!ok) {
+            return sendJson(res, 401, { error: '访问密码错误' });
         }
-        if (!AUTH_TOKEN) {
+        if (!activeAuthToken) {
             return sendJson(res, 200, { ok: true, authEnabled: false });
         }
-        const isHttps = Boolean(req.socket && req.socket.encrypted) || req.headers['x-forwarded-proto'] === 'https';
-        const cookieFlags = [
-            `${SESSION_COOKIE_NAME}=${encodeURIComponent(SESSION_COOKIE_VAL)}`,
-            'HttpOnly',
-            'SameSite=Lax',
-            'Path=/',
-            isHttps ? 'Secure' : ''
-        ]
-            .filter(Boolean)
-            .join('; ');
-        return sendJson(res, 200, { ok: true, authEnabled: true }, { 'Set-Cookie': cookieFlags });
+        return sendJson(
+            res,
+            200,
+            { ok: true, authEnabled: true },
+            { 'Set-Cookie': buildSessionCookieHeader(req, activeAuthToken) }
+        );
     }
 
     if (!isAuthorized(req, parsedUrl)) {
@@ -325,11 +365,26 @@ async function handleApi(req, res, pathname, parsedUrl) {
         if (req.method === 'GET') {
             const current = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
             if (!current.downloadDir) current.downloadDir = DEFAULT_DOWNLOAD_DIR;
-            return sendJson(res, 200, current);
+            const { authPassword, ...safe } = current;
+            return sendJson(res, 200, {
+                ...safe,
+                hasAuthPassword: Boolean(authPassword),
+                envLocked: Boolean(ENV_AUTH_TOKEN)
+            });
         }
         if (req.method === 'PUT') {
             const patch = await parseBody(req);
             const current = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+            const extraHeaders = {};
+            if (typeof patch.authPassword === 'string') {
+                if (ENV_AUTH_TOKEN) {
+                    return sendJson(res, 400, { error: '已通过环境变量 AUTH_TOKEN 锁定，无法在界面修改' });
+                }
+                const nextPass = patch.authPassword.trim();
+                patch.authPassword = nextPass;
+                activeAuthToken = nextPass;
+                extraHeaders['Set-Cookie'] = buildSessionCookieHeader(req, activeAuthToken);
+            }
             if (typeof patch.downloadDir === 'string') {
                 const targetDir = path.resolve(patch.downloadDir.trim() || DEFAULT_DOWNLOAD_DIR);
                 try {
@@ -348,7 +403,17 @@ async function handleApi(req, res, pathname, parsedUrl) {
             }
             const updated = { ...current, ...patch };
             writeJson(SETTINGS_FILE, updated);
-            return sendJson(res, 200, updated);
+            const { authPassword, ...safe } = updated;
+            return sendJson(
+                res,
+                200,
+                {
+                    ...safe,
+                    hasAuthPassword: Boolean(authPassword),
+                    envLocked: Boolean(ENV_AUTH_TOKEN)
+                },
+                extraHeaders
+            );
         }
     }
 

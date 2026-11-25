@@ -1457,6 +1457,11 @@
           <option value="duckduckgo">DuckDuckGo</option>
         </select>
       </div>
+      <div class="https-row" style="margin-top:8px;">
+        <input id="authPassInput" type="password" placeholder="访问密码（留空关闭保护）" autocomplete="new-password" spellcheck="false">
+        <button type="button" id="saveAuthPassBtn" data-action="save-auth-pass">保存</button>
+      </div>
+      <div class="https-note" id="authPassStatus">公网暴露时建议设置访问密码。</div>
     </div>
     <div class="menu-sep"></div>
     <div class="menu-https" id="menuHttps">
@@ -1493,6 +1498,23 @@
       <button class="side-close" id="dlPopCloseBtn" title="关闭">×</button>
     </div>
     <div class="dl-pop-body" id="downloadPopoverBody"></div>
+  </div>
+
+  <!-- 访问密码解锁弹窗 -->
+  <div class="modal-mask" id="authLockModal" style="z-index:300;backdrop-filter:blur(8px);">
+    <div class="modal-card" style="width:min(380px,92vw);">
+      <div class="modal-head">
+        <span>极光浏览器已启用访问保护</span>
+      </div>
+      <div class="modal-body">
+        <div style="font-size:12.5px;color:var(--text-muted);">请输入访问密码以继续使用代理、书签与下载管理。</div>
+        <input type="password" id="authLockInput" placeholder="输入访问密码..." autocomplete="current-password" style="height:36px;padding:0 12px;border-radius:8px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:13px;outline:none;" />
+        <div class="fs-err" id="authLockErr"></div>
+      </div>
+      <div class="modal-foot" style="justify-content:flex-end;">
+        <button class="btn" id="authLockSubmitBtn" type="button" style="background:var(--accent);color:#fff;border-color:var(--accent);padding:6px 18px;">解锁</button>
+      </div>
+    </div>
   </div>
 
   <!-- 连接自检弹窗 -->
@@ -3300,6 +3322,7 @@ function toggleMenu(force) {
     if (check) check.style.visibility = state.ui.showBookmarksBar ? 'visible' : 'hidden';
     const menuSe = document.getElementById('menuSearchEngine');
     if (menuSe) menuSe.value = state.settings.searchEngine || 'bing';
+    updateAuthPassStatus();
   }
   menu.classList.toggle('open', open);
 }
@@ -3427,6 +3450,9 @@ document.getElementById('menuPopup').addEventListener('click', (e) => {
     case 'save-cert-names':
       saveCertNames();
       return; // 保持菜单打开以便确认输入
+    case 'save-auth-pass':
+      saveAuthPass();
+      return;
   }
   toggleMenu(false);
 });
@@ -3767,8 +3793,114 @@ document.getElementById('diagCloseBtn').onclick = closeDiagnosticsModal;
 document.getElementById('diagOkBtn').onclick = closeDiagnosticsModal;
 document.getElementById('diagRetryBtn').onclick = runDiagnostics;
 
+function updateAuthPassStatus() {
+  const statusEl = document.getElementById('authPassStatus');
+  const inputEl = document.getElementById('authPassInput');
+  const btnEl = document.getElementById('saveAuthPassBtn');
+  if (!statusEl) return;
+  if (state.settings.envLocked) {
+    statusEl.textContent = '已通过环境变量 AUTH_TOKEN 锁定，界面不可修改。';
+    if (inputEl) inputEl.disabled = true;
+    if (btnEl) btnEl.disabled = true;
+  } else {
+    if (inputEl) inputEl.disabled = false;
+    if (btnEl) btnEl.disabled = false;
+    statusEl.textContent = state.settings.hasAuthPassword
+      ? '状态：已开启访问密码保护（留空保存可关闭）。'
+      : '状态：未开启密码保护（公网暴露建议设置）。';
+  }
+}
+
+async function saveAuthPass() {
+  const input = document.getElementById('authPassInput');
+  const btn = document.getElementById('saveAuthPassBtn');
+  if (!input) return;
+  const val = input.value.trim();
+  try {
+    const resp = await fetch('/api/settings', {
+      method: 'PUT',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ authPassword: val })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (btn) {
+        btn.textContent = '失败';
+        setTimeout(() => { btn.textContent = '保存'; }, 2000);
+      }
+      return;
+    }
+    state.settings = data;
+    input.value = '';
+    updateAuthPassStatus();
+    if (btn) {
+      btn.textContent = val ? '已开启 ✓' : '已关闭 ✓';
+      setTimeout(() => { btn.textContent = '保存'; }, 2000);
+    }
+  } catch {
+    if (btn) {
+      btn.textContent = '失败';
+      setTimeout(() => { btn.textContent = '保存'; }, 2000);
+    }
+  }
+}
+
+async function ensureAuthenticated() {
+  try {
+    const resp = await fetch('/api/auth/status', { cache: 'no-store' });
+    if (!resp.ok) return true;
+    const info = await resp.json();
+    if (!info.authRequired || info.authenticated) return true;
+
+    const modal = document.getElementById('authLockModal');
+    const input = document.getElementById('authLockInput');
+    const errEl = document.getElementById('authLockErr');
+    const submitBtn = document.getElementById('authLockSubmitBtn');
+    modal.classList.add('open');
+    setTimeout(() => input.focus(), 50);
+
+    await new Promise((resolve) => {
+      const submit = async () => {
+        const pwd = input.value;
+        if (!pwd) {
+          errEl.textContent = '请输入访问密码';
+          return;
+        }
+        submitBtn.disabled = true;
+        errEl.textContent = '';
+        try {
+          const r = await fetch('/api/auth/session', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ password: pwd })
+          });
+          if (r.ok) {
+            modal.classList.remove('open');
+            resolve();
+            return;
+          }
+          const d = await r.json().catch(() => ({}));
+          errEl.textContent = d.error || '访问密码错误';
+        } catch {
+          errEl.textContent = '网络异常，请重试';
+        } finally {
+          submitBtn.disabled = false;
+        }
+      };
+      submitBtn.onclick = submit;
+      input.onkeydown = (e) => {
+        if (e.key === 'Enter') submit();
+      };
+    });
+    return true;
+  } catch {
+    return true;
+  }
+}
+
 // 启动初始化
 (async function init() {
+  await ensureAuthenticated();
   try {
     const [statusResp, settingsResp] = await Promise.all([
       fetch('/api/status', { headers: authHeaders() }),
