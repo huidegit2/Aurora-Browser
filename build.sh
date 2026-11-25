@@ -29,7 +29,7 @@ fi
 for icon in ICON.PNG ICON_256.PNG app/ui/images/icon_64.png app/ui/images/icon_256.png; do
     [ -f "$icon" ] || { echo "缺少必需图标: $icon" >&2; exit 1; }
 done
-for required in manifest config/privilege config/resource app cmd wizard; do
+for required in manifest config/privilege config/resource app cmd; do
     [ -e "$required" ] || { echo "缺少打包必需项: $required" >&2; exit 1; }
 done
 
@@ -76,7 +76,7 @@ fi
 echo "==> [5/6] 隔离目录打包 (platform=${PLATFORM}, version=${VERSION})..."
 STAGE_DIR="$(mktemp -d)"
 trap 'rm -rf "$STAGE_DIR"' EXIT
-cp -a manifest ICON.PNG ICON_256.PNG app cmd config wizard "$STAGE_DIR/"
+cp -a manifest ICON.PNG ICON_256.PNG app cmd config "$STAGE_DIR/"
 mkdir -p "$STAGE_DIR/app/runtime"
 # Ship exactly one Node binary: drop the download-cache node-<arch> files
 # (and any stale runtime left by a previous arch build in this workspace)
