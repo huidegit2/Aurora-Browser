@@ -111,6 +111,22 @@
               "size": 44025992
             }
           }
+        },
+        "1.0.20": {
+          "changelog": "### 新增\n\n- **界面内设置访问密码**：在主菜单直接设置/关闭访问密码（持久化到 `settings.json`），开启后未登录访问自动弹出密码解锁界面，防止公网 DDNS IPv6 暴露时被未授权利用；同时保留 `AUTH_TOKEN` 环境变量最高优先级锁定。",
+          "updated_at": "2026-11-25T09:21:03+00:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.20/fn-browser-arm64.fpk",
+              "sha256": "a3671a5dc18c14ac212d44849a5139daf3603e435dc0fafb04a78b1c6dd9e939",
+              "size": 43987143
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.20/fn-browser-x86_64.fpk",
+              "sha256": "641324a3d7f69ca7e51c1a007a0df706c789914e0e4369d2f0ba1223f6d549d0",
+              "size": 44027469
+            }
+          }
         }
       }
     }
