@@ -727,7 +727,7 @@ function serveFileFromDir(req, res, baseDir, relPath, extraHeaders) {
 // 不影响 /lite-proxy/ 的内网页面（它们可能引用局域网绝对地址资源）。
 const CROSS_ORIGIN_ISOLATION_HEADERS = {
     'Cross-Origin-Opener-Policy': 'same-origin',
-    'Cross-Origin-Embedder-Policy': 'require-corp'
+    'Cross-Origin-Embedder-Policy': 'credentialless'
 };
 
 function serveScramjetAsset(req, res, pathname) {
@@ -878,8 +878,12 @@ function handleLiteProxy(req, res, encodedPart, extraSearch) {
             delete resHeaders['x-frame-options'];
             delete resHeaders['content-security-policy'];
             delete resHeaders['content-security-policy-report-only'];
+            delete resHeaders['cross-origin-opener-policy'];
+            delete resHeaders['cross-origin-embedder-policy'];
+            delete resHeaders['cross-origin-resource-policy'];
             delete resHeaders['strict-transport-security'];
             resHeaders['access-control-allow-origin'] = '*';
+            resHeaders['cross-origin-resource-policy'] = 'cross-origin';
 
             // 处理 301/302 重定向
             if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && resHeaders.location) {

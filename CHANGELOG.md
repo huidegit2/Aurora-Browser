@@ -1,5 +1,11 @@
 # 更新日志
 
+## [1.0.17] - 2026-11-25
+
+### 修复
+
+- 修复轻量直连内核与部分站点在 `iframe` 内加载时触发 `ERR_BLOCKED_BY_RESPONSE`（页面显示红色禁止图标 🚫）的问题：将外壳 `Cross-Origin-Embedder-Policy` 调整为 `credentialless`，并在轻量代理响应中剥离上游 `cross-origin-*` 限制头、补充 `Cross-Origin-Resource-Policy: cross-origin`。
+
 ## [1.0.16] - 2026-11-25
 
 ### 新增
