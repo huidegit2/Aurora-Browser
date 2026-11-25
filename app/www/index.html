@@ -678,6 +678,62 @@
     color: var(--text-muted);
     line-height: 1.6;
   }
+  .menu-https {
+    padding: 7px 10px 4px;
+    font-size: 12px;
+    color: var(--text-secondary);
+    line-height: 1.65;
+  }
+  .menu-https .https-title {
+    font-size: 12.5px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 2px;
+  }
+  .menu-https a {
+    color: var(--accent);
+    text-decoration: none;
+    word-break: break-all;
+  }
+  .menu-https a:hover {
+    text-decoration: underline;
+  }
+  .menu-https .https-links {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin: 4px 0;
+  }
+  .menu-https .https-note {
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .menu-https .https-row {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .menu-https input {
+    flex: 1;
+    min-width: 0;
+    padding: 5px 8px;
+    font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    outline: none;
+  }
+  .menu-https button {
+    padding: 5px 10px;
+    font-size: 12px;
+    color: var(--text-primary);
+    background: var(--bg-input);
+    border: 1px solid var(--border-color);
+    border-radius: 7px;
+    cursor: pointer;
+    white-space: nowrap;
+  }
 
   /* 底部状态栏 */
   .status-bar {
@@ -1101,6 +1157,21 @@
     <button class="menu-item" data-action="find"><span>在页面中查找</span><span class="menu-key">Ctrl+F</span></button>
     <button class="menu-item" data-action="theme"><span>切换深浅色主题</span></button>
     <div class="menu-sep"></div>
+    <div class="menu-https" id="menuHttps">
+      <div class="https-title">HTTPS 全功能</div>
+      <div id="httpsDesc">通过 HTTPS 地址打开极光可激活 Scramjet 内核（站点与视频兼容性最佳）。先在本设备安装并信任极光根证书，再打开 HTTPS 地址：</div>
+      <div class="https-links">
+        <a id="httpsUrlLink" href="#" target="_blank" rel="noopener">HTTPS 地址检测中…</a>
+        <a href="/aurora-ca.mobileconfig">下载根证书（iPhone / iPad）</a>
+        <a href="/aurora-ca.crt">下载根证书（Windows / Android）</a>
+      </div>
+      <div class="https-row">
+        <input id="certNamesInput" type="text" placeholder="额外域名，如 nas.example.com" autocomplete="off" spellcheck="false">
+        <button type="button" data-action="save-cert-names">保存</button>
+      </div>
+      <div class="https-note">额外域名会一并写入服务器证书，保存后重启极光应用生效。</div>
+    </div>
+    <div class="menu-sep"></div>
     <div class="menu-info" id="menuEngineInfo">内核状态检测中…</div>
   </div>
 
@@ -1189,7 +1260,8 @@ const state = {
   engineMode: 'lite',
   ui: { showBookmarksBar: true, sidebarOpen: false, sidebarPanel: 'history' },
   sj: { ready: false, controller: null, bootPromise: null },
-  rh: { available: false, sessionId: null, sessionPromise: null }
+  rh: { available: false, sessionId: null, sessionPromise: null },
+  https: { enabled: false, port: 18921 }
 };
 
 // Base64URL 编码（用于内置轻量代理）
@@ -2647,10 +2719,55 @@ function toggleMenu(force) {
   if (open) {
     syncZoomIndicators();
     updateMenuEngineInfo();
+    updateHttpsSection();
     const check = document.getElementById('bmbarCheck');
     if (check) check.style.visibility = state.ui.showBookmarksBar ? 'visible' : 'hidden';
   }
   menu.classList.toggle('open', open);
+}
+
+// HTTPS 全功能区：地址取当前主机名 + 服务端报告的 HTTPS 端口
+function httpsShellUrl() {
+  let host = location.hostname || 'localhost';
+  if (host.includes(':') && !host.startsWith('[')) host = `[${host}]`;
+  return `https://${host}:${state.https.port}/`;
+}
+
+function updateHttpsSection() {
+  const link = document.getElementById('httpsUrlLink');
+  const desc = document.getElementById('httpsDesc');
+  const input = document.getElementById('certNamesInput');
+  if (!link) return;
+  if (state.https.enabled) {
+    const url = httpsShellUrl();
+    link.href = url;
+    link.textContent = url;
+    if (desc) {
+      desc.textContent =
+        '通过 HTTPS 地址打开极光可激活 Scramjet 内核（站点与视频兼容性最佳）。先在本设备安装并信任极光根证书，再打开 HTTPS 地址：';
+    }
+  } else {
+    link.removeAttribute('href');
+    link.textContent = 'HTTPS 未启用';
+    if (desc) desc.textContent = '本机的 HTTPS 入口未能启动，根证书下载与 Scramjet 全功能暂不可用。';
+  }
+  if (input && document.activeElement !== input) {
+    const cn = state.settings.certNames;
+    input.value = Array.isArray(cn) ? cn.join(', ') : cn || '';
+  }
+}
+
+async function saveCertNames() {
+  const input = document.getElementById('certNamesInput');
+  const value = input ? input.value.trim() : '';
+  state.settings.certNames = value;
+  try {
+    await fetch('/api/settings', {
+      method: 'PUT',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ certNames: value })
+    });
+  } catch (e) {}
 }
 
 document.getElementById('menuBtn').onclick = (e) => {
@@ -2691,6 +2808,9 @@ document.getElementById('menuPopup').addEventListener('click', (e) => {
     case 'theme':
       toggleTheme();
       break;
+    case 'save-cert-names':
+      saveCertNames();
+      return; // 保持菜单打开以便确认输入
   }
   toggleMenu(false);
 });
@@ -2927,6 +3047,9 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
     const status = await statusResp.json();
     state.engineMode = status.engine || 'lite';
     state.rh.available = !!status.rammerhead;
+    if (status.https) {
+      state.https = { enabled: !!status.https.enabled, port: status.https.port || 18921 };
+    }
     const badge = document.getElementById('engineBadge');
     badge.title = `内存占用: ${status.memoryMB} MB`;
     updateEngineBadge();
@@ -2942,6 +3065,7 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
     if (typeof state.settings.showBookmarksBar === 'boolean') {
       state.ui.showBookmarksBar = state.settings.showBookmarksBar;
     }
+    updateHttpsSection();
     applyTheme(state.settings.theme || 'system');
   } catch (e) {
     applyTheme('system');

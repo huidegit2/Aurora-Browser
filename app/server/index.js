@@ -1,6 +1,7 @@
 const http = require('http');
 const https = require('https');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const zlib = require('zlib');
 const { URL } = require('url');
@@ -102,6 +103,263 @@ function writeJson(filePath, data) {
 readJson(BOOKMARKS_FILE, DEFAULT_BOOKMARKS);
 readJson(HISTORY_FILE, []);
 readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+
+// ---------------------------------------------------------------------------
+// 1b. 自带 HTTPS（本地 CA）：Scramjet 需要安全上下文，经局域网 IP 以
+//     HTTP 打开时永远无法启动。本服务在 DATA_DIR/tls 下维护一个本地
+//     根 CA，为本机全部网卡地址签发服务器证书，并在 HTTPS_PORT（默认
+//     18921）上以与 HTTP 完全相同的请求/升级处理器提供 HTTPS 入口。
+//     用户在每台设备上一次性安装并信任该根证书后，用
+//     https://<NAS-IP>:18921 打开即是受信任的安全上下文。
+//     TLS 初始化的任何失败都只记录日志，绝不影响 HTTP 服务启动。
+// ---------------------------------------------------------------------------
+const HTTPS_PORT = parseInt(process.env.HTTPS_PORT || '18921', 10);
+const TLS_DIR = path.join(DATA_DIR, 'tls');
+const httpsStatus = { enabled: false, port: HTTPS_PORT };
+let caCertDerBuffer = null; // 根证书 DER（公开材料），供下载端点使用
+let caProfileUuid = null; // .mobileconfig 外层 PayloadUUID（由证书指纹派生）
+let caCertUuid = null; // .mobileconfig 内层证书 PayloadUUID
+
+function parseCertNames(raw) {
+    const list = [];
+    const push = (v) => {
+        const name = String(v || '').trim().toLowerCase();
+        if (name && !list.includes(name)) list.push(name);
+    };
+    if (Array.isArray(raw)) raw.forEach(push);
+    else if (typeof raw === 'string') raw.split(',').forEach(push);
+    return list;
+}
+
+// 服务器证书应覆盖的 SAN 集合：全部非内网卡地址（IPv4/IPv6）+ 回环 +
+// localhost + 环境变量/设置里登记的额外域名（修改后重启应用生效）
+function collectServerCertSans() {
+    const ips = new Set(['127.0.0.1', '::1']);
+    const dnsNames = new Set(['localhost']);
+    try {
+        for (const entries of Object.values(os.networkInterfaces())) {
+            for (const entry of entries || []) {
+                if (!entry.internal && entry.address) ips.add(entry.address.toLowerCase());
+            }
+        }
+    } catch {}
+    parseCertNames(process.env.AURORA_CERT_NAMES).forEach((n) => dnsNames.add(n));
+    try {
+        const settings = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+        parseCertNames(settings.certNames).forEach((n) => dnsNames.add(n));
+    } catch {}
+    return { ips: [...ips], dnsNames: [...dnsNames] };
+}
+
+function forgeSerialNumber(forge) {
+    let hex = forge.util.bytesToHex(forge.random.getBytesSync(16));
+    // DER INTEGER 为有符号数：首字节最高位为 1 时补 00 保持正数
+    if (parseInt(hex.slice(0, 2), 16) >= 0x80) hex = `00${hex}`;
+    return hex;
+}
+
+function forgeCreateCa(forge) {
+    const keys = forge.pki.rsa.generateKeyPair(2048);
+    const cert = forge.pki.createCertificate();
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = forgeSerialNumber(forge);
+    cert.validity.notBefore = new Date(Date.now() - 24 * 3600 * 1000);
+    cert.validity.notAfter = new Date(Date.now() + 10 * 365 * 24 * 3600 * 1000);
+    const attrs = [
+        { name: 'commonName', value: 'Aurora Local CA' },
+        { name: 'organizationName', value: 'Aurora' }
+    ];
+    cert.setSubject(attrs);
+    cert.setIssuer(attrs);
+    cert.setExtensions([
+        { name: 'basicConstraints', cA: true, critical: true },
+        { name: 'keyUsage', keyCertSign: true, cRLSign: true, critical: true },
+        { name: 'subjectKeyIdentifier' }
+    ]);
+    cert.sign(keys.privateKey, forge.md.sha256.create());
+    return { cert, privateKey: keys.privateKey, fresh: true };
+}
+
+// 已存 CA 可解析且未临近过期则复用（永不无故重签，否则所有设备要重装）
+function loadOrCreateCa(forge) {
+    const keyPath = path.join(TLS_DIR, 'ca.key.pem');
+    const crtPath = path.join(TLS_DIR, 'ca.crt.pem');
+    try {
+        if (fs.existsSync(keyPath) && fs.existsSync(crtPath)) {
+            const privateKey = forge.pki.privateKeyFromPem(fs.readFileSync(keyPath, 'utf8'));
+            const cert = forge.pki.certificateFromPem(fs.readFileSync(crtPath, 'utf8'));
+            if (cert.validity.notAfter.getTime() - Date.now() > 30 * 24 * 3600 * 1000) {
+                return { cert, privateKey, fresh: false };
+            }
+            console.log('[fn-browser] 已存 CA 临近过期，将重新生成');
+        }
+    } catch (err) {
+        console.log(`[fn-browser] 已存 CA 无法解析，将重新生成（${err.message}）`);
+    }
+    const ca = forgeCreateCa(forge);
+    fs.writeFileSync(keyPath, forge.pki.privateKeyToPem(ca.privateKey), { mode: 0o600 });
+    fs.chmodSync(keyPath, 0o600); // 已存在文件时 writeFile 的 mode 不生效，显式收紧
+    fs.writeFileSync(crtPath, forge.pki.certificateToPem(ca.cert), { mode: 0o644 });
+    return ca;
+}
+
+function certSansOf(forgeCert) {
+    const ips = new Set();
+    const dns = new Set();
+    try {
+        const ext = forgeCert.getExtension('subjectAltName');
+        if (ext && Array.isArray(ext.altNames)) {
+            for (const alt of ext.altNames) {
+                if (alt.type === 7 && alt.ip) ips.add(String(alt.ip).toLowerCase());
+                else if (alt.type === 2 && alt.value) dns.add(String(alt.value).toLowerCase());
+            }
+        }
+    } catch {}
+    return { ips, dns };
+}
+
+function forgeIssueServerCert(forge, ca, sans) {
+    const keys = forge.pki.rsa.generateKeyPair(2048);
+    const cert = forge.pki.createCertificate();
+    cert.publicKey = keys.publicKey;
+    cert.serialNumber = forgeSerialNumber(forge);
+    cert.validity.notBefore = new Date(Date.now() - 24 * 3600 * 1000);
+    cert.validity.notAfter = new Date(Date.now() + 800 * 24 * 3600 * 1000);
+    cert.setSubject([
+        { name: 'commonName', value: 'Aurora' },
+        { name: 'organizationName', value: 'Aurora' }
+    ]);
+    cert.setIssuer(ca.cert.subject.attributes);
+    cert.setExtensions([
+        { name: 'basicConstraints', cA: false },
+        { name: 'keyUsage', digitalSignature: true, keyEncipherment: true },
+        { name: 'extKeyUsage', serverAuth: true },
+        {
+            name: 'subjectAltName',
+            altNames: [
+                ...sans.dnsNames.map((v) => ({ type: 2, value: v })),
+                ...sans.ips.map((ip) => ({ type: 7, ip }))
+            ]
+        },
+        { name: 'subjectKeyIdentifier' }
+    ]);
+    cert.sign(ca.privateKey, forge.md.sha256.create());
+    return { cert, privateKey: keys.privateKey };
+}
+
+// 已存服务器证书若覆盖当前全部 SAN 且 30 天内不过期则复用，否则重签
+function loadOrIssueServerCert(forge, ca, sans) {
+    const keyPath = path.join(TLS_DIR, 'server.key.pem');
+    const crtPath = path.join(TLS_DIR, 'server.crt.pem');
+    if (!ca.fresh) {
+        try {
+            const cert = forge.pki.certificateFromPem(fs.readFileSync(crtPath, 'utf8'));
+            const privateKey = forge.pki.privateKeyFromPem(fs.readFileSync(keyPath, 'utf8'));
+            const have = certSansOf(cert);
+            const missing =
+                sans.ips.some((ip) => !have.ips.has(ip)) ||
+                sans.dnsNames.some((n) => !have.dns.has(n));
+            const expiresSoon =
+                cert.validity.notAfter.getTime() - Date.now() < 30 * 24 * 3600 * 1000;
+            if (!missing && !expiresSoon) return { cert, privateKey };
+        } catch {}
+    }
+    const issued = forgeIssueServerCert(forge, ca, sans);
+    fs.writeFileSync(keyPath, forge.pki.privateKeyToPem(issued.privateKey), { mode: 0o600 });
+    fs.chmodSync(keyPath, 0o600);
+    fs.writeFileSync(crtPath, forge.pki.certificateToPem(issued.cert), { mode: 0o644 });
+    return issued;
+}
+
+function uuidFromHex(hex, offset) {
+    const h = (hex.slice(offset, offset + 32) + '00000000000000000000000000000000').slice(0, 32);
+    return (
+        `${h.slice(0, 8)}-${h.slice(8, 12)}-${h.slice(12, 16)}-` +
+        `${h.slice(16, 20)}-${h.slice(20, 32)}`
+    ).toUpperCase();
+}
+
+// 准备 TLS 材料并填充 CA 下载端点所需数据；失败时返回 null（仅 HTTP 运行）
+function initTlsMaterials() {
+    let forge;
+    try {
+        forge = require('node-forge');
+    } catch (err) {
+        console.log(`[fn-browser] node-forge 不可用，HTTPS 未启用（${err.message}）`);
+        return null;
+    }
+    fs.mkdirSync(TLS_DIR, { recursive: true });
+    const ca = loadOrCreateCa(forge);
+    const sans = collectServerCertSans();
+    const serverCert = loadOrIssueServerCert(forge, ca, sans);
+
+    const derBytes = forge.asn1.toDer(forge.pki.certificateToAsn1(ca.cert)).getBytes();
+    caCertDerBuffer = Buffer.from(derBytes, 'binary');
+    const sha1 = forge.md.sha1.create();
+    sha1.update(derBytes);
+    const fingerprint = sha1.digest().toHex();
+    caCertUuid = uuidFromHex(fingerprint, 0);
+    const sha256 = forge.md.sha256.create();
+    sha256.update(derBytes);
+    caProfileUuid = uuidFromHex(sha256.digest().toHex(), 0);
+    console.log(
+        `[fn-browser] 本地 CA 就绪（指纹 SHA1 ${fingerprint.slice(0, 16)}…，` +
+            `${ca.fresh ? '新生成' : '复用已存'}），服务器证书 SAN: ` +
+            `${sans.dnsNames.join(', ')} / ${sans.ips.join(', ')}`
+    );
+    return {
+        keyPem: forge.pki.privateKeyToPem(serverCert.privateKey),
+        // 叶子证书 + 根证书链一并提供，方便个别严格客户端补全信任链
+        certPem:
+            forge.pki.certificateToPem(serverCert.cert) + forge.pki.certificateToPem(ca.cert)
+    };
+}
+
+// Apple 配置描述文件：内嵌根证书（com.apple.security.root），iOS 上经
+// Safari 下载后可在「设置 - 通用 - VPN 与设备管理」中一键安装
+function buildCaMobileConfig() {
+    const b64 = caCertDerBuffer.toString('base64').replace(/.{64}/g, '$&\n');
+    return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>PayloadContent</key>
+	<array>
+		<dict>
+			<key>PayloadType</key>
+			<string>com.apple.security.root</string>
+			<key>PayloadVersion</key>
+			<integer>1</integer>
+			<key>PayloadIdentifier</key>
+			<string>com.aurora.ca.certificate</string>
+			<key>PayloadUUID</key>
+			<string>${caCertUuid}</string>
+			<key>PayloadDisplayName</key>
+			<string>极光 Aurora 根证书</string>
+			<key>PayloadContent</key>
+			<data>
+${b64}
+			</data>
+		</dict>
+	</array>
+	<key>PayloadType</key>
+	<string>Configuration</string>
+	<key>PayloadVersion</key>
+	<integer>1</integer>
+	<key>PayloadIdentifier</key>
+	<string>com.aurora.ca</string>
+	<key>PayloadUUID</key>
+	<string>${caProfileUuid}</string>
+	<key>PayloadDisplayName</key>
+	<string>极光 Aurora 根证书</string>
+	<key>PayloadOrganization</key>
+	<string>Aurora</string>
+	<key>PayloadDescription</key>
+	<string>安装极光 Aurora 的本地根证书，以便通过 HTTPS 安全打开极光并启用 Scramjet 内核。</string>
+</dict>
+</plist>
+`;
+}
 
 // ---------------------------------------------------------------------------
 // 2. 加载代理内核：Scramjet（Mercury Workshop）+ Wisp 服务端
@@ -603,6 +861,7 @@ async function handleApi(req, res, pathname, parsedUrl) {
             ok: true,
             engine: engineMode,
             rammerhead: rhAvailable,
+            https: { enabled: httpsStatus.enabled, port: httpsStatus.port },
             version: APP_VERSION,
             uptime: Math.floor(process.uptime()),
             memoryMB: Math.round(process.memoryUsage().rss / 1024 / 1024)
@@ -715,7 +974,8 @@ function serveStatic(req, res, pathname) {
 // ---------------------------------------------------------------------------
 // 5. 统一 HTTP & WebSocket 入口
 // ---------------------------------------------------------------------------
-const server = http.createServer(async (req, res) => {
+// HTTP 与 HTTPS 共用同一套处理器，保证两个入口行为完全一致
+const requestHandler = async (req, res) => {
     try {
         const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const pathname = parsedUrl.pathname;
@@ -726,6 +986,27 @@ const server = http.createServer(async (req, res) => {
                 'Cache-Control': 'no-cache',
                 ...CROSS_ORIGIN_ISOLATION_HEADERS
             });
+        }
+
+        // 本地 CA 根证书下载（DER 证书 / Apple 配置描述文件）。这里只
+        // 提供证书本身——纯公钥材料，可以公开分发；任何私钥永不经
+        // HTTP(S) 输出。与外壳页一样不设令牌门槛：用户必须先在设备
+        // 上取证并安装信任，才能首次通过 HTTPS 打开应用。
+        if (pathname === '/aurora-ca.crt' && caCertDerBuffer) {
+            res.writeHead(200, {
+                'Content-Type': 'application/x-x509-ca-cert',
+                'Content-Disposition': 'attachment; filename="aurora-ca.crt"',
+                'Cache-Control': 'no-cache'
+            });
+            return res.end(caCertDerBuffer);
+        }
+        if (pathname === '/aurora-ca.mobileconfig' && caCertDerBuffer) {
+            res.writeHead(200, {
+                'Content-Type': 'application/x-apple-aspen-config',
+                'Content-Disposition': 'attachment; filename="aurora-ca.mobileconfig"',
+                'Cache-Control': 'no-cache'
+            });
+            return res.end(buildCaMobileConfig());
         }
 
         // Rammerhead 页面桥接脚本（被注入的代理页面从站点根路径取用；
@@ -777,11 +1058,11 @@ const server = http.createServer(async (req, res) => {
             res.end('Internal Server Error');
         }
     }
-});
+};
 
 // WebSocket 升级入口：/wisp/ 交给 Wisp 服务端（Scramjet 的出站传输通道），
 // Rammerhead 作用域内的升级交给其自身（被代理站点的 WebSocket 连接）
-server.on('upgrade', (req, socket, head) => {
+const upgradeHandler = (req, socket, head) => {
     try {
         const parsed = new URL(req.url || '/', 'http://localhost');
         if (parsed.pathname === '/wisp/' && wispRouteRequest) {
@@ -801,8 +1082,35 @@ server.on('upgrade', (req, socket, head) => {
         console.error('[fn-browser] WebSocket upgrade error:', err);
     }
     socket.destroy();
-});
+};
+
+const server = http.createServer(requestHandler);
+server.on('upgrade', upgradeHandler);
 
 server.listen(PORT, HOST, () => {
     console.log(`[fn-browser] 飞牛原生浏览器已启动: http://${HOST}:${PORT} (内核: ${engineMode})`);
 });
+
+// HTTPS 入口：与 HTTP 共用处理器；初始化或监听失败只降级，不阻断 HTTP
+try {
+    const tlsMaterials = initTlsMaterials();
+    if (tlsMaterials) {
+        const httpsServer = https.createServer(
+            { key: tlsMaterials.keyPem, cert: tlsMaterials.certPem },
+            requestHandler
+        );
+        httpsServer.on('upgrade', upgradeHandler);
+        httpsServer.on('error', (err) => {
+            httpsStatus.enabled = false;
+            console.log(`[fn-browser] HTTPS 监听异常，HTTPS 入口不可用（${err.message}）`);
+        });
+        httpsServer.listen(HTTPS_PORT, HOST, () => {
+            httpsStatus.enabled = true;
+            console.log(
+                `[fn-browser] HTTPS 入口已启动: https://${HOST}:${HTTPS_PORT}（根证书下载: /aurora-ca.crt）`
+            );
+        });
+    }
+} catch (err) {
+    console.log(`[fn-browser] HTTPS 初始化失败，继续仅提供 HTTP（${err.message}）`);
+}
