@@ -47,6 +47,9 @@ fs.mkdirSync(CACHE_DIR, { recursive: true });
 const BOOKMARKS_FILE = path.join(DATA_DIR, 'bookmarks.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
+const DOWNLOADS_FILE = path.join(DATA_DIR, 'downloads.json');
+const DEFAULT_DOWNLOAD_DIR = path.join(DATA_DIR, 'downloads');
+fs.mkdirSync(DEFAULT_DOWNLOAD_DIR, { recursive: true });
 
 const DEFAULT_BOOKMARKS = [
     { id: 'bm-1', title: '必应搜索', url: 'https://cn.bing.com', category: '常用网站', color: '#0FC6C2' },
@@ -61,7 +64,8 @@ const DEFAULT_SETTINGS = {
     searchEngine: 'bing',
     theme: 'system',
     homepageMode: 'dashboard',
-    maxHistory: 200
+    maxHistory: 200,
+    downloadDir: DEFAULT_DOWNLOAD_DIR
 };
 
 function readJson(filePath, fallback) {
@@ -86,6 +90,285 @@ function writeJson(filePath, data) {
 readJson(BOOKMARKS_FILE, DEFAULT_BOOKMARKS);
 readJson(HISTORY_FILE, []);
 readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+readJson(DOWNLOADS_FILE, []);
+
+// ---------------------------------------------------------------------------
+// 1a. 飞牛存储目录探测 & 服务端下载管理器
+// ---------------------------------------------------------------------------
+const activeDownloads = new Map(); // id -> { req, stream, tmpPath, cancelled }
+
+function isDirWritable(dirPath) {
+    try {
+        fs.accessSync(dirPath, fs.constants.W_OK);
+        return true;
+    } catch {
+        return false;
+    }
+}
+
+function getFnOsRoots() {
+    const roots = [];
+    const seen = new Set();
+    const pushRoot = (p, label) => {
+        const resolved = path.resolve(p);
+        if (seen.has(resolved)) return;
+        try {
+            if (!fs.statSync(resolved).isDirectory()) return;
+        } catch {
+            return;
+        }
+        seen.add(resolved);
+        roots.push({ path: resolved, label, writable: isDirWritable(resolved) });
+    };
+
+    pushRoot(DEFAULT_DOWNLOAD_DIR, '默认下载目录 (应用数据)');
+    const sharePaths = String(process.env.TRIM_DATA_SHARE_PATHS || '')
+        .split(':')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    sharePaths.forEach((p, idx) => pushRoot(p, `飞牛授权目录${sharePaths.length > 1 ? ` ${idx + 1}` : ''}`));
+
+    for (let i = 1; i <= 9; i++) {
+        pushRoot(`/vol${i}`, `存储空间 ${i} (/vol${i})`);
+    }
+    pushRoot('/mnt', '挂载目录 (/mnt)');
+    return roots;
+}
+
+function sanitizeFilename(name) {
+    const cleaned = String(name || '')
+        .replace(/[\\/:*?"<>|\x00-\x1f]/g, '_')
+        .replace(/^\.+/, '')
+        .trim();
+    return cleaned.slice(0, 180) || `download-${Date.now()}`;
+}
+
+function filenameFromDisposition(headerVal) {
+    if (!headerVal) return '';
+    const utf8Match = /filename\*\s*=\s*(?:UTF-8''|utf-8'')([^;]+)/i.exec(headerVal);
+    if (utf8Match) {
+        try {
+            return sanitizeFilename(decodeURIComponent(utf8Match[1].trim().replace(/^["']|["']$/g, '')));
+        } catch {}
+    }
+    const plainMatch = /filename\s*=\s*"([^"]+)"|filename\s*=\s*([^;]+)/i.exec(headerVal);
+    if (plainMatch) {
+        return sanitizeFilename((plainMatch[1] || plainMatch[2] || '').trim());
+    }
+    return '';
+}
+
+function uniqueFilePath(dir, filename) {
+    const ext = path.extname(filename);
+    const base = ext ? filename.slice(0, -ext.length) : filename;
+    let candidate = path.join(dir, filename);
+    let idx = 1;
+    while (fs.existsSync(candidate) || fs.existsSync(`${candidate}.part`)) {
+        candidate = path.join(dir, `${base} (${idx})${ext}`);
+        idx += 1;
+    }
+    return candidate;
+}
+
+function getDownloadsList() {
+    const saved = readJson(DOWNLOADS_FILE, []);
+    return saved.map((item) => {
+        const active = activeDownloads.get(item.id);
+        if (active) {
+            return {
+                ...item,
+                status: 'downloading',
+                receivedBytes: active.receivedBytes,
+                totalBytes: active.totalBytes,
+                speedBps: active.speedBps
+            };
+        }
+        return item;
+    });
+}
+
+function updateDownloadRecord(id, patch) {
+    const list = readJson(DOWNLOADS_FILE, []);
+    const idx = list.findIndex((d) => d.id === id);
+    if (idx === -1) return;
+    list[idx] = { ...list[idx], ...patch };
+    writeJson(DOWNLOADS_FILE, list);
+}
+
+function startNasDownload(rawUrl, preferredName, targetDir) {
+    let parsed;
+    try {
+        parsed = new URL(String(rawUrl || '').trim());
+    } catch {
+        throw new Error('无效的下载地址');
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+        throw new Error('仅支持 http / https 下载地址');
+    }
+
+    const dir = path.resolve(targetDir || DEFAULT_DOWNLOAD_DIR);
+    fs.mkdirSync(dir, { recursive: true });
+    if (!isDirWritable(dir)) {
+        throw new Error('目标目录不可写，请在飞牛应用设置中授权文件夹权限');
+    }
+
+    let fallbackName = preferredName ? sanitizeFilename(preferredName) : '';
+    if (!fallbackName) {
+        try {
+            const base = path.basename(decodeURIComponent(parsed.pathname));
+            if (base && base !== '/') fallbackName = sanitizeFilename(base);
+        } catch {}
+    }
+    if (!fallbackName) fallbackName = `download-${Date.now()}`;
+
+    const id = `dl-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+    const record = {
+        id,
+        url: parsed.href,
+        filename: fallbackName,
+        dir,
+        filePath: '',
+        status: 'downloading',
+        receivedBytes: 0,
+        totalBytes: 0,
+        speedBps: 0,
+        error: '',
+        createdAt: new Date().toISOString()
+    };
+
+    const list = readJson(DOWNLOADS_FILE, []);
+    list.unshift(record);
+    if (list.length > 100) list.length = 100;
+    writeJson(DOWNLOADS_FILE, list);
+
+    const stateObj = {
+        req: null,
+        stream: null,
+        tmpPath: '',
+        cancelled: false,
+        receivedBytes: 0,
+        totalBytes: 0,
+        speedBps: 0,
+        lastBytes: 0,
+        lastTick: Date.now()
+    };
+    activeDownloads.set(id, stateObj);
+
+    const fetchUrl = (currentUrl, redirectsLeft) => {
+        if (stateObj.cancelled) return;
+        let u;
+        try {
+            u = new URL(currentUrl);
+        } catch {
+            activeDownloads.delete(id);
+            return updateDownloadRecord(id, { status: 'failed', error: '重定向地址无效' });
+        }
+        const mod = u.protocol === 'https:' ? https : http;
+        const req = mod.get(
+            u,
+            {
+                headers: {
+                    'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AuroraBrowser/1.0'
+                },
+                rejectUnauthorized: false
+            },
+            (resp) => {
+                if ([301, 302, 303, 307, 308].includes(resp.statusCode) && resp.headers.location) {
+                    resp.resume();
+                    if (redirectsLeft <= 0) {
+                        activeDownloads.delete(id);
+                        return updateDownloadRecord(id, { status: 'failed', error: '重定向次数过多' });
+                    }
+                    const nextUrl = new URL(resp.headers.location, u).href;
+                    return fetchUrl(nextUrl, redirectsLeft - 1);
+                }
+                if (resp.statusCode >= 400) {
+                    resp.resume();
+                    activeDownloads.delete(id);
+                    return updateDownloadRecord(id, {
+                        status: 'failed',
+                        error: `HTTP ${resp.statusCode}`
+                    });
+                }
+
+                const dispName = filenameFromDisposition(resp.headers['content-disposition']);
+                const finalName = dispName || fallbackName;
+                const finalPath = uniqueFilePath(dir, finalName);
+                const tmpPath = `${finalPath}.part`;
+                stateObj.tmpPath = tmpPath;
+                stateObj.totalBytes = parseInt(resp.headers['content-length'] || '0', 10) || 0;
+                updateDownloadRecord(id, {
+                    filename: path.basename(finalPath),
+                    filePath: finalPath,
+                    totalBytes: stateObj.totalBytes
+                });
+
+                const ws = fs.createWriteStream(tmpPath);
+                stateObj.stream = ws;
+
+                resp.on('data', (chunk) => {
+                    stateObj.receivedBytes += chunk.length;
+                    const now = Date.now();
+                    const dt = now - stateObj.lastTick;
+                    if (dt >= 500) {
+                        stateObj.speedBps = Math.round(((stateObj.receivedBytes - stateObj.lastBytes) * 1000) / dt);
+                        stateObj.lastBytes = stateObj.receivedBytes;
+                        stateObj.lastTick = now;
+                    }
+                });
+
+                resp.pipe(ws);
+
+                ws.on('finish', () => {
+                    activeDownloads.delete(id);
+                    if (stateObj.cancelled) {
+                        try { fs.unlinkSync(tmpPath); } catch {}
+                        return;
+                    }
+                    try {
+                        fs.renameSync(tmpPath, finalPath);
+                        updateDownloadRecord(id, {
+                            status: 'completed',
+                            receivedBytes: stateObj.receivedBytes,
+                            totalBytes: stateObj.totalBytes || stateObj.receivedBytes,
+                            speedBps: 0,
+                            finishedAt: new Date().toISOString()
+                        });
+                    } catch (err) {
+                        updateDownloadRecord(id, { status: 'failed', error: err.message });
+                    }
+                });
+
+                ws.on('error', (err) => {
+                    activeDownloads.delete(id);
+                    try { fs.unlinkSync(tmpPath); } catch {}
+                    if (!stateObj.cancelled) {
+                        updateDownloadRecord(id, { status: 'failed', error: err.message });
+                    }
+                });
+
+                resp.on('error', (err) => {
+                    activeDownloads.delete(id);
+                    try { ws.destroy(); } catch {}
+                    try { fs.unlinkSync(tmpPath); } catch {}
+                    if (!stateObj.cancelled) {
+                        updateDownloadRecord(id, { status: 'failed', error: err.message });
+                    }
+                });
+            }
+        );
+        stateObj.req = req;
+        req.on('error', (err) => {
+            activeDownloads.delete(id);
+            if (!stateObj.cancelled) {
+                updateDownloadRecord(id, { status: 'failed', error: err.message });
+            }
+        });
+    };
+
+    fetchUrl(parsed.href, 5);
+    return record;
+}
 
 // ---------------------------------------------------------------------------
 // 1b. 自带 HTTPS（本地 CA）：Scramjet 需要安全上下文，经局域网 IP 以
@@ -764,14 +1047,143 @@ async function handleApi(req, res, pathname, parsedUrl) {
     // 浏览器设置
     if (pathname === '/api/settings') {
         if (req.method === 'GET') {
-            return sendJson(res, 200, readJson(SETTINGS_FILE, DEFAULT_SETTINGS));
+            const current = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+            if (!current.downloadDir) current.downloadDir = DEFAULT_DOWNLOAD_DIR;
+            return sendJson(res, 200, current);
         }
         if (req.method === 'PUT') {
             const patch = await parseBody(req);
             const current = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+            if (typeof patch.downloadDir === 'string') {
+                const targetDir = path.resolve(patch.downloadDir.trim() || DEFAULT_DOWNLOAD_DIR);
+                try {
+                    fs.mkdirSync(targetDir, { recursive: true });
+                    if (!isDirWritable(targetDir)) {
+                        return sendJson(res, 400, {
+                            error: '该目录不可写，请在飞牛「应用设置 -> 文件夹权限」中授权，或选择应用默认目录'
+                        });
+                    }
+                    patch.downloadDir = targetDir;
+                } catch (err) {
+                    return sendJson(res, 400, { error: `无法访问目录: ${err.message}` });
+                }
+            }
             const updated = { ...current, ...patch };
             writeJson(SETTINGS_FILE, updated);
             return sendJson(res, 200, updated);
+        }
+    }
+
+    // 飞牛存储目录浏览
+    if (pathname === '/api/fs/roots' && req.method === 'GET') {
+        return sendJson(res, 200, {
+            defaultDir: DEFAULT_DOWNLOAD_DIR,
+            roots: getFnOsRoots()
+        });
+    }
+
+    if (pathname === '/api/fs/list' && req.method === 'GET') {
+        const target = path.resolve(parsedUrl.searchParams.get('dir') || DEFAULT_DOWNLOAD_DIR);
+        try {
+            const entries = fs.readdirSync(target, { withFileTypes: true });
+            const dirs = entries
+                .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+                .map((e) => {
+                    const full = path.join(target, e.name);
+                    return { name: e.name, path: full, writable: isDirWritable(full) };
+                })
+                .sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+            const parent = path.dirname(target);
+            return sendJson(res, 200, {
+                dir: target,
+                parent: parent !== target ? parent : null,
+                writable: isDirWritable(target),
+                dirs
+            });
+        } catch (err) {
+            return sendJson(res, 400, { error: `无法读取目录: ${err.message}` });
+        }
+    }
+
+    if (pathname === '/api/fs/mkdir' && req.method === 'POST') {
+        const body = await parseBody(req);
+        const parent = path.resolve(String(body.parent || DEFAULT_DOWNLOAD_DIR));
+        const name = sanitizeFilename(body.name || '');
+        if (!name) return sendJson(res, 400, { error: '请输入文件夹名称' });
+        const target = path.join(parent, name);
+        try {
+            fs.mkdirSync(target, { recursive: true });
+            return sendJson(res, 201, { path: target, name, writable: isDirWritable(target) });
+        } catch (err) {
+            return sendJson(res, 400, { error: `创建失败: ${err.message}` });
+        }
+    }
+
+    // NAS 下载管理
+    if (pathname === '/api/downloads') {
+        if (req.method === 'GET') {
+            const settings = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+            return sendJson(res, 200, {
+                downloadDir: settings.downloadDir || DEFAULT_DOWNLOAD_DIR,
+                items: getDownloadsList()
+            });
+        }
+        if (req.method === 'POST') {
+            const body = await parseBody(req);
+            const settings = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+            const dir = body.dir || settings.downloadDir || DEFAULT_DOWNLOAD_DIR;
+            try {
+                const record = startNasDownload(body.url, body.filename, dir);
+                return sendJson(res, 201, record);
+            } catch (err) {
+                return sendJson(res, 400, { error: err.message });
+            }
+        }
+        if (req.method === 'DELETE') {
+            const remaining = readJson(DOWNLOADS_FILE, []).filter((d) => activeDownloads.has(d.id));
+            writeJson(DOWNLOADS_FILE, remaining);
+            return sendJson(res, 200, { ok: true });
+        }
+    }
+
+    if (pathname.startsWith('/api/downloads/')) {
+        const rest = pathname.slice('/api/downloads/'.length);
+        if (rest.endsWith('/cancel') && req.method === 'POST') {
+            const id = decodeURIComponent(rest.slice(0, -'/cancel'.length));
+            const active = activeDownloads.get(id);
+            if (active) {
+                active.cancelled = true;
+                try { if (active.req) active.req.destroy(); } catch {}
+                try { if (active.stream) active.stream.destroy(); } catch {}
+                try { if (active.tmpPath) fs.unlinkSync(active.tmpPath); } catch {}
+                activeDownloads.delete(id);
+            }
+            updateDownloadRecord(id, { status: 'cancelled', speedBps: 0 });
+            return sendJson(res, 200, { ok: true });
+        }
+        if (rest.endsWith('/file') && req.method === 'GET') {
+            const id = decodeURIComponent(rest.slice(0, -'/file'.length));
+            const item = readJson(DOWNLOADS_FILE, []).find((d) => d.id === id);
+            if (!item || !item.filePath || !fs.existsSync(item.filePath)) {
+                return sendJson(res, 404, { error: '文件不存在或已被移动' });
+            }
+            const stat = fs.statSync(item.filePath);
+            res.writeHead(200, {
+                'Content-Type': 'application/octet-stream',
+                'Content-Length': stat.size,
+                'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(item.filename)}`
+            });
+            return fs.createReadStream(item.filePath).pipe(res);
+        }
+        if (req.method === 'DELETE') {
+            const id = decodeURIComponent(rest);
+            const list = readJson(DOWNLOADS_FILE, []);
+            const item = list.find((d) => d.id === id);
+            if (item && parsedUrl.searchParams.get('deleteFile') === '1' && item.filePath) {
+                try { fs.unlinkSync(item.filePath); } catch {}
+            }
+            writeJson(DOWNLOADS_FILE, list.filter((d) => d.id !== id));
+            return sendJson(res, 200, { ok: true });
         }
     }
 

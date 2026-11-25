@@ -1075,6 +1075,219 @@
       opacity: 1;
     }
   }
+
+  /* 下载管理 & 飞牛目录选择器 */
+  .dl-btn { position: relative; }
+  .dl-dot {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--accent);
+    display: none;
+  }
+  .dl-btn.active .dl-dot { display: block; }
+  .dl-toolbar {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .dl-dir-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+  }
+  .dl-dir-path {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    color: var(--text);
+    background: var(--bg-input);
+    padding: 4px 8px;
+    border-radius: 6px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+  }
+  .dl-new-row {
+    display: flex;
+    gap: 6px;
+  }
+  .dl-new-row input {
+    flex: 1;
+    min-width: 0;
+    height: 28px;
+    padding: 0 8px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+    color: var(--text);
+    font-size: 12px;
+    outline: none;
+  }
+  .dl-new-row input:focus { border-color: var(--accent); background: var(--bg-input-focus); }
+  .dl-item {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+  }
+  .dl-item-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .dl-name {
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .dl-meta {
+    font-size: 11px;
+    color: var(--text-muted);
+    display: flex;
+    justify-content: space-between;
+    gap: 6px;
+  }
+  .dl-bar {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--bg-input);
+    overflow: hidden;
+  }
+  .dl-bar-fill {
+    height: 100%;
+    background: var(--accent);
+    transition: width 0.25s ease;
+  }
+  .dl-actions {
+    display: flex;
+    gap: 8px;
+    font-size: 11.5px;
+  }
+  .dl-link {
+    background: none;
+    border: none;
+    padding: 0;
+    color: var(--accent);
+    cursor: pointer;
+    font-size: 11.5px;
+    text-decoration: none;
+  }
+  .dl-link.danger { color: #e5484d; }
+  .modal-mask {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    display: none;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    padding: 16px;
+  }
+  .modal-mask.open { display: flex; }
+  .modal-card {
+    width: min(560px, 96vw);
+    max-height: 82vh;
+    background: var(--bg-toolbar);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-md);
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .modal-head {
+    padding: 12px 16px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-weight: 600;
+    font-size: 14px;
+  }
+  .modal-body {
+    padding: 12px 16px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    flex: 1;
+  }
+  .fs-roots {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+  .fs-chip {
+    padding: 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+    color: var(--text);
+    font-size: 11.5px;
+    cursor: pointer;
+  }
+  .fs-chip.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 500;
+  }
+  .fs-pathbar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .fs-pathbar input {
+    flex: 1;
+    height: 30px;
+    padding: 0 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border);
+    background: var(--bg-input);
+    color: var(--text);
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  .fs-list {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    max-height: 250px;
+    overflow-y: auto;
+  }
+  .fs-row {
+    padding: 8px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    cursor: pointer;
+    border-bottom: 1px solid var(--border);
+    font-size: 12.5px;
+  }
+  .fs-row:last-child { border-bottom: none; }
+  .fs-row:hover { background: var(--bg-input); }
+  .fs-tag { font-size: 11px; color: var(--text-muted); }
+  .modal-foot {
+    padding: 10px 16px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+  .fs-err { font-size: 11.5px; color: #e5484d; flex: 1; }
 </style>
 </head>
 <body>
@@ -1103,6 +1316,7 @@
       <button class="star-btn" id="starBtn" title="收藏当前页面">☆</button>
     </div>
 
+    <button class="nav-btn dl-btn" id="downloadsBtn" title="下载管理 (Ctrl+J)">⬇<span class="dl-dot"></span></button>
     <button class="nav-btn" id="sidebarBtn" title="侧边栏：历史 / 书签 / 下载 (Ctrl+H)">🗂</button>
     <button class="nav-btn" id="themeBtn" title="切换深浅色主题">🌓</button>
     <button class="nav-btn" id="menuBtn" title="菜单">⋮</button>
@@ -1146,6 +1360,7 @@
     <button class="menu-item" data-action="newtab"><span>新建标签页</span><span class="menu-key">Ctrl+T</span></button>
     <button class="menu-item" data-action="history"><span>历史记录</span><span class="menu-key">Ctrl+H</span></button>
     <button class="menu-item" data-action="bookmarks-panel"><span>书签</span></button>
+    <button class="menu-item" data-action="downloads-panel"><span>下载管理</span><span class="menu-key">Ctrl+J</span></button>
     <button class="menu-item" data-action="toggle-bmbar"><span>显示书签栏</span><span class="menu-check" id="bmbarCheck">✓</span></button>
     <div class="menu-sep"></div>
     <div class="menu-zoom-row">
@@ -1193,6 +1408,30 @@
     <span class="engine-badge" id="engineBadge" title="当前代理内核状态">检测中...</span>
     <span class="status-text" id="statusText"></span>
     <button class="status-zoom" id="statusZoom" title="页面缩放，点击重置为 100%">100%</button>
+  </div>
+
+  <!-- 飞牛存储目录选择器 -->
+  <div class="modal-mask" id="folderModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <span>选择 NAS 下载存储目录</span>
+        <button class="side-close" id="folderModalClose" title="关闭">×</button>
+      </div>
+      <div class="modal-body">
+        <div class="fs-roots" id="fsRoots"></div>
+        <div class="fs-pathbar">
+          <button class="btn" id="fsUpBtn" type="button">上级</button>
+          <input type="text" id="fsPathInput" readonly />
+          <button class="btn" id="fsMkdirBtn" type="button">+ 新建文件夹</button>
+        </div>
+        <div class="fs-list" id="fsList"></div>
+      </div>
+      <div class="modal-foot">
+        <span class="fs-err" id="fsErr"></span>
+        <button class="btn" id="fsCancelBtn" type="button">取消</button>
+        <button class="btn" id="fsConfirmBtn" type="button" style="background:var(--accent);color:#fff;border-color:var(--accent);">选择此目录</button>
+      </div>
+    </div>
   </div>
 </div>
 
@@ -1584,6 +1823,14 @@ function installFramePopupGuards(frame) {
           if (!a) return;
           const raw = a.getAttribute('href') || '';
           if (/^(javascript:|data:|blob:|mailto:|tel:|#)/i.test(raw)) return;
+          if (a.hasAttribute('download')) {
+            e.preventDefault();
+            e.stopPropagation();
+            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+            const target = decodeProxyTargetUrl(a.href || raw, win);
+            if (target) startNasDownload(target, a.getAttribute('download') || '', true);
+            return;
+          }
           const targetAttr = (a.getAttribute('target') || '').toLowerCase();
           if (targetAttr === '_blank' || e.button === 1 || e.ctrlKey || e.metaKey) {
             e.preventDefault();
@@ -2195,6 +2442,7 @@ document.querySelectorAll('.side-tab').forEach((btn) => {
   };
 });
 document.getElementById('sideCloseBtn').onclick = () => closeSidebar();
+document.getElementById('downloadsBtn').onclick = () => toggleSidebar('downloads');
 document.getElementById('sidebarBtn').onclick = () => toggleSidebar('history');
 
 async function renderSidebarPanel() {
@@ -2283,10 +2531,305 @@ async function renderSidebarPanel() {
     return;
   }
 
-  // 下载：服务端没有下载管理接口，这里只做诚实空状态，不伪造任何记录
-  body.innerHTML =
-    '<div class="side-empty">暂无下载记录<br/>当前版本未提供应用内下载管理，<br/>网页中的文件下载由目标站点与系统处理。</div>';
+  // 下载管理（NAS 服务端直下 + 飞牛存储目录选择）
+  await renderDownloadsPanel(body);
 }
+
+let downloadsPollTimer = null;
+let downloadsCache = { downloadDir: '', items: [] };
+
+function formatBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / 1024 / 1024).toFixed(1)} MB`;
+  return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
+}
+
+function updateDownloadIndicator(items) {
+  const active = (items || []).some((d) => d.status === 'downloading');
+  const btn = document.getElementById('downloadsBtn');
+  if (btn) btn.classList.toggle('active', active);
+  if (active && !downloadsPollTimer) {
+    downloadsPollTimer = setInterval(async () => {
+      await fetchDownloadsState();
+      if (state.ui.sidebarOpen && state.ui.sidebarPanel === 'downloads') {
+        const body = document.getElementById('sidebarBody');
+        if (body && (!document.activeElement || !body.contains(document.activeElement) || document.activeElement.tagName !== 'INPUT')) {
+          drawDownloadsBody(body);
+        }
+      }
+    }, 1000);
+  } else if (!active && downloadsPollTimer) {
+    clearInterval(downloadsPollTimer);
+    downloadsPollTimer = null;
+  }
+}
+
+async function fetchDownloadsState() {
+  try {
+    const resp = await fetch('/api/downloads', { headers: authHeaders() });
+    if (resp.ok) {
+      downloadsCache = await resp.json();
+      if (downloadsCache.downloadDir) state.settings.downloadDir = downloadsCache.downloadDir;
+      updateDownloadIndicator(downloadsCache.items);
+    }
+  } catch {}
+}
+
+async function startNasDownload(url, filename = '', openPanel = false) {
+  const targetUrl = String(url || '').trim();
+  if (!targetUrl) return;
+  try {
+    const resp = await fetch('/api/downloads', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ url: targetUrl, filename })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      setStatusText(`下载失败：${data.error || '未知错误'}`);
+      return;
+    }
+    setStatusText(`已开始下载到 NAS：${data.filename}`);
+    await fetchDownloadsState();
+    if (openPanel) {
+      openSidebar('downloads');
+    } else if (state.ui.sidebarOpen && state.ui.sidebarPanel === 'downloads') {
+      drawDownloadsBody(document.getElementById('sidebarBody'));
+    }
+  } catch (err) {
+    setStatusText(`下载请求失败：${err.message}`);
+  }
+}
+
+function drawDownloadsBody(body) {
+  if (!body) return;
+  const dir = downloadsCache.downloadDir || state.settings.downloadDir || '';
+  const items = downloadsCache.items || [];
+  const listHtml = items.length
+    ? items
+        .map((d) => {
+          const pct = d.totalBytes > 0 ? Math.min(100, Math.round((d.receivedBytes * 100) / d.totalBytes)) : 0;
+          const sizeText = d.totalBytes > 0
+            ? `${formatBytes(d.receivedBytes)} / ${formatBytes(d.totalBytes)}`
+            : formatBytes(d.receivedBytes);
+          const statusMap = {
+            downloading: d.speedBps ? `${formatBytes(d.speedBps)}/s` : '下载中…',
+            completed: '已完成',
+            failed: `失败：${d.error || '未知错误'}`,
+            cancelled: '已取消'
+          };
+          return `
+            <div class="dl-item">
+              <div class="dl-item-head">
+                <span class="dl-name" title="${escapeHtml(d.filePath || d.filename)}">${escapeHtml(d.filename)}</span>
+                <span class="fs-tag">${escapeHtml(statusMap[d.status] || d.status)}</span>
+              </div>
+              ${d.status === 'downloading' ? `<div class="dl-bar"><div class="dl-bar-fill" style="width:${d.totalBytes ? pct : 35}%"></div></div>` : ''}
+              <div class="dl-meta">
+                <span>${escapeHtml(sizeText)}</span>
+                <span title="${escapeHtml(d.dir || '')}">${escapeHtml(d.dir || '')}</span>
+              </div>
+              <div class="dl-actions">
+                ${d.status === 'downloading'
+                  ? `<button class="dl-link danger" data-dl-cancel="${escapeHtml(d.id)}">取消</button>`
+                  : ''}
+                ${d.status === 'completed'
+                  ? `<a class="dl-link" href="${escapeHtml(withToken('/api/downloads/' + encodeURIComponent(d.id) + '/file'))}">取回本地</a>`
+                  : ''}
+                ${d.status !== 'downloading'
+                  ? `<button class="dl-link danger" data-dl-del="${escapeHtml(d.id)}">删除记录</button>`
+                  : ''}
+              </div>
+            </div>`;
+        })
+        .join('')
+    : '<div class="side-empty">暂无下载任务<br/>可在上方粘贴直链下载到 NAS，<br/>或在网页中点击下载链接自动接管。</div>';
+
+  body.innerHTML = `
+    <div class="dl-toolbar">
+      <div class="dl-dir-row">
+        <span>存至</span>
+        <span class="dl-dir-path" title="${escapeHtml(dir)}">${escapeHtml(dir || '默认目录')}</span>
+        <button class="btn" id="dlPickDirBtn" type="button">更改</button>
+      </div>
+      <div class="dl-new-row">
+        <input type="text" id="dlNewUrlInput" placeholder="粘贴直链 URL 下载到 NAS..." autocomplete="off" spellcheck="false" />
+        <button class="btn" id="dlStartBtn" type="button">下载</button>
+      </div>
+      ${items.some((d) => d.status !== 'downloading') ? '<div style="display:flex;justify-content:flex-end;"><button class="dl-link" id="dlClearDoneBtn" type="button">清空已完成记录</button></div>' : ''}
+    </div>
+    <div id="dlListWrap">${listHtml}</div>
+  `;
+
+  document.getElementById('dlPickDirBtn').onclick = () => openFolderPicker();
+  const urlInput = document.getElementById('dlNewUrlInput');
+  const startBtn = document.getElementById('dlStartBtn');
+  startBtn.onclick = () => {
+    const val = urlInput.value.trim();
+    if (!val) return;
+    urlInput.value = '';
+    startNasDownload(val, '', false);
+  };
+  urlInput.onkeydown = (e) => {
+    if (e.key === 'Enter') startBtn.click();
+  };
+  const clearBtn = document.getElementById('dlClearDoneBtn');
+  if (clearBtn) {
+    clearBtn.onclick = async () => {
+      await fetch('/api/downloads', { method: 'DELETE', headers: authHeaders() });
+      await fetchDownloadsState();
+      drawDownloadsBody(body);
+    };
+  }
+  body.querySelectorAll('[data-dl-cancel]').forEach((btn) => {
+    btn.onclick = async () => {
+      await fetch(`/api/downloads/${encodeURIComponent(btn.getAttribute('data-dl-cancel'))}/cancel`, {
+        method: 'POST',
+        headers: authHeaders()
+      });
+      await fetchDownloadsState();
+      drawDownloadsBody(body);
+    };
+  });
+  body.querySelectorAll('[data-dl-del]').forEach((btn) => {
+    btn.onclick = async () => {
+      await fetch(`/api/downloads/${encodeURIComponent(btn.getAttribute('data-dl-del'))}`, {
+        method: 'DELETE',
+        headers: authHeaders()
+      });
+      await fetchDownloadsState();
+      drawDownloadsBody(body);
+    };
+  });
+}
+
+async function renderDownloadsPanel(body) {
+  body.innerHTML = '<div class="side-empty">加载中…</div>';
+  await fetchDownloadsState();
+  drawDownloadsBody(body);
+}
+
+// 飞牛存储目录选择器
+let pickerCurrentDir = '';
+let pickerParentDir = null;
+
+async function browsePickerDir(dir) {
+  const errEl = document.getElementById('fsErr');
+  if (errEl) errEl.textContent = '';
+  try {
+    const resp = await fetch(`/api/fs/list?dir=${encodeURIComponent(dir)}`, { headers: authHeaders() });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (errEl) errEl.textContent = data.error || '无法读取目录';
+      return;
+    }
+    pickerCurrentDir = data.dir;
+    pickerParentDir = data.parent;
+    document.getElementById('fsPathInput').value = data.dir;
+    document.getElementById('fsUpBtn').disabled = !data.parent;
+    document.querySelectorAll('#fsRoots .fs-chip').forEach((c) => {
+      c.classList.toggle('active', data.dir === c.getAttribute('data-root') || data.dir.startsWith(c.getAttribute('data-root') + '/'));
+    });
+
+    const listEl = document.getElementById('fsList');
+    if (!data.dirs.length) {
+      listEl.innerHTML = '<div class="side-empty" style="padding:20px;">此目录下没有子文件夹</div>';
+    } else {
+      listEl.innerHTML = data.dirs
+        .map(
+          (d) => `
+        <div class="fs-row" data-dir="${escapeHtml(d.path)}">
+          <span>📁 ${escapeHtml(d.name)}</span>
+          <span class="fs-tag">${d.writable ? '✓ 可写' : '🔒 只读'}</span>
+        </div>`
+        )
+        .join('');
+      listEl.querySelectorAll('.fs-row').forEach((row) => {
+        row.onclick = () => browsePickerDir(row.getAttribute('data-dir'));
+      });
+    }
+    if (!data.writable && errEl) {
+      errEl.textContent = '当前目录只读：请进入已授权的子目录，或在飞牛「应用设置 -> 文件夹权限」中授权';
+    }
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message;
+  }
+}
+
+async function openFolderPicker() {
+  const modal = document.getElementById('folderModal');
+  const rootsEl = document.getElementById('fsRoots');
+  modal.classList.add('open');
+  try {
+    const resp = await fetch('/api/fs/roots', { headers: authHeaders() });
+    const data = await resp.json();
+    const roots = data.roots || [];
+    rootsEl.innerHTML = roots
+      .map(
+        (r) => `<button type="button" class="fs-chip" data-root="${escapeHtml(r.path)}">${escapeHtml(r.label)}</button>`
+      )
+      .join('');
+    rootsEl.querySelectorAll('.fs-chip').forEach((chip) => {
+      chip.onclick = () => browsePickerDir(chip.getAttribute('data-root'));
+    });
+    await browsePickerDir(state.settings.downloadDir || data.defaultDir || (roots[0] && roots[0].path) || '/');
+  } catch {}
+}
+
+function closeFolderPicker() {
+  document.getElementById('folderModal').classList.remove('open');
+}
+
+document.getElementById('folderModalClose').onclick = closeFolderPicker;
+document.getElementById('fsCancelBtn').onclick = closeFolderPicker;
+document.getElementById('fsUpBtn').onclick = () => {
+  if (pickerParentDir) browsePickerDir(pickerParentDir);
+};
+document.getElementById('fsMkdirBtn').onclick = async () => {
+  const name = prompt('请输入新建文件夹名称：');
+  if (!name || !name.trim()) return;
+  const errEl = document.getElementById('fsErr');
+  try {
+    const resp = await fetch('/api/fs/mkdir', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ parent: pickerCurrentDir, name: name.trim() })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (errEl) errEl.textContent = data.error || '创建失败';
+      return;
+    }
+    await browsePickerDir(data.path);
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message;
+  }
+};
+document.getElementById('fsConfirmBtn').onclick = async () => {
+  const errEl = document.getElementById('fsErr');
+  try {
+    const resp = await fetch('/api/settings', {
+      method: 'PUT',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ downloadDir: pickerCurrentDir })
+    });
+    const data = await resp.json();
+    if (!resp.ok) {
+      if (errEl) errEl.textContent = data.error || '设置失败';
+      return;
+    }
+    state.settings.downloadDir = data.downloadDir;
+    downloadsCache.downloadDir = data.downloadDir;
+    closeFolderPicker();
+    if (state.ui.sidebarOpen && state.ui.sidebarPanel === 'downloads') {
+      drawDownloadsBody(document.getElementById('sidebarBody'));
+    }
+  } catch (err) {
+    if (errEl) errEl.textContent = err.message;
+  }
+};
 
 // ---------------------------------------------------------------------------
 // 地址栏下拉：历史补全 + 书签匹配 + 搜索（全部来自真实数据）
@@ -2640,6 +3183,9 @@ document.getElementById('menuPopup').addEventListener('click', (e) => {
     case 'bookmarks-panel':
       openSidebar('bookmarks');
       break;
+    case 'downloads-panel':
+      openSidebar('downloads');
+      break;
     case 'toggle-bmbar':
       setBookmarksBarVisible(!state.ui.showBookmarksBar);
       return; // 保持菜单打开以便看到勾选状态变化
@@ -2828,6 +3374,9 @@ window.addEventListener('keydown', (e) => {
   } else if (mod && key === 'h') {
     e.preventDefault();
     toggleSidebar('history');
+  } else if (mod && key === 'j') {
+    e.preventDefault();
+    toggleSidebar('downloads');
   } else if (mod && e.shiftKey && key === 'b') {
     e.preventDefault();
     setBookmarksBarVisible(!state.ui.showBookmarksBar);

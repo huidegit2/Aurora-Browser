@@ -62,6 +62,7 @@ start_app() {
     echo "[fn-browser] Starting with Node: $NODE_BIN" >> "$LOG_FILE" 2>/dev/null || true
     PORT="$PORT" \
     DATA_DIR="$DATA_DIR" \
+    TRIM_DATA_SHARE_PATHS="${TRIM_DATA_SHARE_PATHS:-}" \
     CACHE_DIR="$VAR_DIR/sessions" \
     WWW_DIR="$APP_DIR/www" \
     AUTH_TOKEN="${AUTH_TOKEN:-}" \
