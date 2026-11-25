@@ -10,8 +10,13 @@
     "fn-browser": {
       "display_name": "极光浏览器",
       "desc": "极光浏览器 Aurora · 飞牛 fnOS 原生网页代理浏览器，搭载 Scramjet 满血内核，支持自定义外部 TLS 证书、Chrome 风格独立下载气泡浮窗、飞牛存储目录直下与多标签页管理；提供 ARM64 与 x86_64 双架构包。",
-      "platform": ["arm", "x86"],
-      "categories": ["系统工具"],
+      "platform": [
+        "arm",
+        "x86"
+      ],
+      "categories": [
+        "系统工具"
+      ],
       "icon_url": "./ICON_256.PNG",
       "readme_url": "./README.md",
       "bug_report_url": "https://github.com/huidegit2/Aurora-Browser/issues",
@@ -35,6 +40,22 @@
               "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.15/fn-browser-x86_64.fpk",
               "sha256": "ad65c5459a313f7f81bb43eac20140ed50670a72000671a1fe2b28b985035fd2",
               "size": 44022553
+            }
+          }
+        },
+        "1.0.16": {
+          "changelog": "### 新增\n\n- Chrome 风格独立下载气泡浮窗：将下载管理从侧边栏拆出，支持文件类型图标、实时角标计数、一键「下载当前页链接」、失败重试与直接清理 NAS 文件。\n- `Ctrl+Shift+T` 恢复最近关闭的标签页（菜单同步新增入口）。\n- 适配 [EWEDLCM/FnDepot](https://github.com/EWEDLCM/FnDepot/) V2 外部应用源规范：根目录新增 `fnpack.json`，支持通过 GitHub 仓库或直链订阅更新。",
+          "updated_at": "2026-11-25T06:59:36+00:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.16/fn-browser-arm64.fpk",
+              "sha256": "02770dfefb572a2af54061472bea38451a81e741933d5aa14790795a9440e0fe",
+              "size": 43985818
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.16/fn-browser-x86_64.fpk",
+              "sha256": "71c2f9d02e85cb2bd0b113ddcf4fb60b1d792fe8fe7267023edd89972d5af5e0",
+              "size": 44023193
             }
           }
         }
