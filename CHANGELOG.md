@@ -1,5 +1,18 @@
 # 更新日志
 
+## [1.0.11] - 2026-11-25
+
+### 新增
+
+- Rammerhead 内核（Ruby Network 维护版 1.3.6）：以 HTTP 方式打开时，外部网站改走服务端代理，视频与复杂页面的兼容性优于轻量直连；HTTPS 打开仍走 Scramjet，内网地址仍走轻量直连。
+- 自带 HTTPS：首次启动时在数据目录生成本地根 CA，并为 NAS 的全部 IP 地址自动签发服务器证书，新增 18921 HTTPS 入口——用 IP 直连打开也能激活 Scramjet 内核。菜单「HTTPS 全功能」提供根证书下载（iPhone/iPad 描述文件、Windows/Android 证书）与附加证书域名设置，IP 变化后重启应用自动重签。
+
+### 修复
+
+- Rammerhead 页面中「新窗口打开」的链接会逃出外壳、弹出裸会话地址窗口：注入拦截脚本，此类链接改为在极光内打开新标签页。
+- 应用中心图标显示为占位图：四处图标全部改为标准 PNG（补齐 sRGB/gAMA 数据块），图标生成脚本同步修正，后续构建不再复发。
+- 打包层与已验证可安装的包对齐，修复 GitHub 构建的包在部分 fnOS 上提示「应用包不符合系统要求」无法安装：manifest 移除 `os_min_version`、`ctl_stop`、`maintainer_url`、`distributor_url`；`config/privilege` 恢复 `username`/`groupname`；`config/resource` 改回 `{}`；打包不再包含 `wizard/` 目录。
+
 ## [1.0.6] - 2026-11-24
 
 ### 新增
