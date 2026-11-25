@@ -58,6 +58,22 @@
               "size": 44023193
             }
           }
+        },
+        "1.0.17": {
+          "changelog": "极光 Aurora v1.0.17\n\n- 请查看仓库提交记录获取本次变更。\n- ARM64 与 x86_64 双架构安装包已随本版本发布。",
+          "updated_at": "2026-11-25T07:12:50+00:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.17/fn-browser-arm64.fpk",
+              "sha256": "f3fc8da781b7749dd2d21ae01dd1196f8279325847f29fdb60bf97d0489b08a8",
+              "size": 43985964
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.17/fn-browser-x86_64.fpk",
+              "sha256": "eed75eb39b2153f3eacf60aaf341570966f477854746755b4a3d13b396c92140",
+              "size": 44019976
+            }
+          }
         }
       }
     }
