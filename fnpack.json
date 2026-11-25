@@ -159,6 +159,22 @@
               "size": 44027104
             }
           }
+        },
+        "1.0.23": {
+          "changelog": "### 修复\n\n- **彻底解决首次访问内核误跳轻量、刷新才恢复的 Bug**：\n  - [sw.js](file:///C:/Users/31936/.gemini/antigravity/scratch/Aurora-Browser/app/www/sw.js) 新增 `skipWaiting()` 与 `clients.claim()`，安装后免刷新立即接管页面；\n  - `navigateTab()` 在安全上下文下会等待 Scramjet 启动完成再分流内核，杜绝抢跑回退。\n- **修复地址栏交互 Bug 并新增桌面级行内自动补齐**：支持点击全选、Chrome 同款历史/书签行内自动补全、中文输入法组词防抖及方向键预览。\n\n### 新增\n\n- **标签页右键菜单与加载动画**：右键标签页支持刷新、复制、关闭其他/右侧标签与恢复关闭页；加载网页时标签图标位显示旋转动画。\n- **地址栏左侧安全状态图标**：实时显示 HTTPS / Scramjet / 轻量内核状态，点击直达连接自检。",
+          "updated_at": "2026-11-25T09:57:41+00:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.23/fn-browser-arm64.fpk",
+              "sha256": "9e23656f33e65da066d1c2e0d93ace11540639dc9ffbd4066eb36f4d3b1d9c69",
+              "size": 43988011
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.23/fn-browser-x86_64.fpk",
+              "sha256": "74c90b88dc33301d7d07ae6f1cc57f4a67c8c935efb5d23b942d8e901ed819b7",
+              "size": 44026111
+            }
+          }
         }
       }
     }
