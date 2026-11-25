@@ -160,6 +160,9 @@ try {
         '/utils/': utilsDir,
         '/epoxy/': epoxyDir
     };
+    if (wispServer.options) {
+        wispServer.options.allow_private_ips = true;
+    }
     wispRouteRequest = wispServer.routeRequest.bind(wispServer);
     engineMode = 'scramjet';
     console.log('[fn-browser] Scramjet + Wisp 内核已就绪');

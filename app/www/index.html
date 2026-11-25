@@ -1763,7 +1763,10 @@ function isIntranetUrl(targetUrl) {
 }
 
 function canUseScramjet(targetUrl) {
-  return state.sj.ready && !!state.sj.controller && !isIntranetUrl(targetUrl);
+  if (!state.sj.ready || !state.sj.controller) return false;
+  // http:// 内网设备（如 192.168.1.1 路由器/爱快）走 Scramjet 满血内核以支持 JS/Cookie；
+  // https:// 自签证书内网设备（如 PVE）继续走轻量直连跳过证书校验
+  return !isIntranetUrl(targetUrl) || /^http:\/\//i.test(targetUrl);
 }
 
 // ---------------------------------------------------------------------------

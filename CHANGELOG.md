@@ -1,5 +1,12 @@
 # 更新日志
 
+## [1.0.22] - 2026-11-25
+
+### 修复
+
+- **彻底修复轻量代理红 🚫 拦截**：在 `/lite-proxy/*` 响应头中补齐 `Cross-Origin-Embedder-Policy: credentialless`，解决 Edge/Chrome 下内嵌 `iframe` 被 `ERR_BLOCKED_BY_RESPONSE` 拦截的问题。
+- **支持 `192.168.1.1` 等内网设备走 Scramjet 满血内核**：为 Wisp 开启 `allow_private_ips`，`http://` 内网设备（如路由器/爱快/OpenWrt）可直接使用 Scramjet 完整渲染与登录；`https://` 自签内网设备（如 PVE）保留走轻量直连跳过证书校验。
+
 ## [1.0.21] - 2026-11-25
 
 ### 优化

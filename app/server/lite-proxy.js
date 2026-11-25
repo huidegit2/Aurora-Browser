@@ -137,6 +137,7 @@ function createLiteProxy({ tokenParam }) {
                 delete resHeaders['strict-transport-security'];
                 resHeaders['access-control-allow-origin'] = '*';
                 resHeaders['cross-origin-resource-policy'] = 'cross-origin';
+                resHeaders['cross-origin-embedder-policy'] = 'credentialless';
 
                 if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && resHeaders.location) {
                     try {
