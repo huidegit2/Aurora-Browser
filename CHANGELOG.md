@@ -1,5 +1,24 @@
 # 更新日志
 
+## [1.0.19] - 2026-11-25
+
+### 新增
+
+- **连接自检面板与 `/healthz`**：主菜单新增「连接自检」，一键诊断安全上下文、Service Worker、HTTPS/证书连通性与 `/wisp/` WebSocket 通道。
+- **鉴权安全加固**：访问携带的 `?_aurora_token=` 参数读取后立即从地址栏清除，并新增 `POST /api/auth/session` 交换 `HttpOnly` 会话 Cookie。
+
+### 优化
+
+- **服务端模块化重构**：将 `app/server/index.js` 拆分为 `storage.js`、`tls.js`、`downloads.js`、`lite-proxy.js`，提升可维护性。
+- **fnOS 权限与日志加固**：权限不足返回明确错误码 `EACCES_SHARE_PATH`；`cmd/main` 启动前自动轮转超过 5 MB 的运行日志。
+- **CI/CD 与开源规范**：`release.yml` 增加静态语法/JSON 校验与 `npm` 缓存，`extract_changelog.py` 未匹配段落时自动回退读取 `git log`；补充 `AGPL-3.0` `LICENSE` 与 `.github/dependabot.yml`。
+
+## [1.0.18] - 2026-11-25
+
+### 修复
+
+- 同步提交 `COEP: credentialless` 与轻量代理响应头清洗修复，彻底解决 `ERR_BLOCKED_BY_RESPONSE` 红叉拦截问题。
+
 ## [1.0.17] - 2026-11-25
 
 ### 修复

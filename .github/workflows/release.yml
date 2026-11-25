@@ -37,6 +37,18 @@ jobs:
         with:
           node-version: "20"
 
+      - name: Cache npm downloads
+        uses: actions/cache@v4
+        with:
+          path: ~/.npm
+          key: ${{ runner.os }}-npm-${{ hashFiles('app/server/package-lock.json') }}
+
+      - name: Static checks
+        run: |
+          for f in app/server/*.js; do node --check "$f"; done
+          python3 -c "import json; d=json.load(open('fnpack.json',encoding='utf-8')); assert d['schema_version']=='2'"
+          node -e "const fs=require('fs'),h=fs.readFileSync('app/www/index.html','utf8');new Function(h.match(/<script>([\s\S]*)<\/script>/)[1])"
+
       - name: Resolve version
         id: ver
         run: |

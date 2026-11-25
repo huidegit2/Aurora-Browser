@@ -1446,6 +1446,7 @@
     <div class="menu-sep"></div>
     <button class="menu-item" data-action="find"><span>在页面中查找</span><span class="menu-key">Ctrl+F</span></button>
     <button class="menu-item" data-action="theme"><span>切换深浅色主题</span></button>
+    <button class="menu-item" data-action="diagnostics"><span>连接自检</span></button>
     <div class="menu-https" style="padding-top:6px;padding-bottom:6px;">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
         <span style="font-size:12px;color:var(--text-muted);">默认搜索引擎</span>
@@ -1492,6 +1493,22 @@
       <button class="side-close" id="dlPopCloseBtn" title="关闭">×</button>
     </div>
     <div class="dl-pop-body" id="downloadPopoverBody"></div>
+  </div>
+
+  <!-- 连接自检弹窗 -->
+  <div class="modal-mask" id="diagModal">
+    <div class="modal-card">
+      <div class="modal-head">
+        <span>连接与内核自检</span>
+        <button class="side-close" id="diagCloseBtn" title="关闭">×</button>
+      </div>
+      <div class="modal-body" id="diagBody"></div>
+      <div class="modal-foot">
+        <span class="fs-err" id="diagHint" style="color:var(--text-muted);"></span>
+        <button class="btn" id="diagRetryBtn" type="button">重新检测</button>
+        <button class="btn" id="diagOkBtn" type="button" style="background:var(--accent);color:#fff;border-color:var(--accent);">完成</button>
+      </div>
+    </div>
   </div>
 
   <!-- 飞牛存储目录选择器 -->
@@ -1549,12 +1566,24 @@
 
 <script>
 
-// Optional shared secret: supply it once via ?_aurora_token=... and reuse it
-// for API calls, the lite proxy and the Wisp transport.
+// Optional shared secret: supply it once via ?_aurora_token=..., strip it
+// from the address bar immediately, and exchange for an HttpOnly session cookie.
 (function cacheAuroraToken() {
   try {
-    const fromUrl = new URLSearchParams(location.search).get('_aurora_token');
-    if (fromUrl) sessionStorage.setItem('auroraToken', fromUrl);
+    const url = new URL(location.href);
+    const fromUrl = url.searchParams.get('_aurora_token');
+    if (fromUrl) {
+      sessionStorage.setItem('auroraToken', fromUrl);
+      url.searchParams.delete('_aurora_token');
+      history.replaceState({}, document.title, url.pathname + url.search + url.hash);
+    }
+    const token = sessionStorage.getItem('auroraToken');
+    if (token) {
+      fetch('/api/auth/session', {
+        method: 'POST',
+        headers: { 'X-Aurora-Token': token }
+      }).catch(() => {});
+    }
   } catch (e) {}
 })();
 
@@ -3392,6 +3421,9 @@ document.getElementById('menuPopup').addEventListener('click', (e) => {
     case 'theme':
       toggleTheme();
       break;
+    case 'diagnostics':
+      openDiagnosticsModal();
+      break;
     case 'save-cert-names':
       saveCertNames();
       return; // 保持菜单打开以便确认输入
@@ -3626,6 +3658,114 @@ window.addEventListener('keydown', (e) => {
 window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
   if (state.settings.theme === 'system') applyTheme('system');
 });
+
+// 连接自检诊断面板
+async function runDiagnostics() {
+  const body = document.getElementById('diagBody');
+  const hint = document.getElementById('diagHint');
+  if (!body) return;
+  if (hint) hint.textContent = '正在检测…';
+
+  const items = [
+    { key: 'ctx', name: '1. 安全上下文 (HTTPS / localhost)', ok: null, detail: '检测中…' },
+    { key: 'sw', name: '2. Service Worker 控制权', ok: null, detail: '检测中…' },
+    { key: 'tls', name: '3. HTTPS / 证书连通性', ok: null, detail: '检测中…' },
+    { key: 'ws', name: '4. Wisp WebSocket 通道', ok: null, detail: '检测中…' }
+  ];
+
+  const render = () => {
+    body.innerHTML = items
+      .map((it) => {
+        const badge = it.ok === null ? '⏳' : (it.ok ? '✓ 正常' : '✕ 异常');
+        const color = it.ok === null ? 'var(--text-muted)' : (it.ok ? '#00b42a' : '#e5484d');
+        return `
+          <div class="fs-row" style="cursor:default;flex-direction:column;align-items:flex-start;gap:4px;">
+            <div style="display:flex;width:100%;justify-content:space-between;align-items:center;">
+              <span style="font-weight:500;">${escapeHtml(it.name)}</span>
+              <span style="font-size:12px;color:${color};font-weight:600;">${badge}</span>
+            </div>
+            <div style="font-size:11.5px;color:var(--text-muted);">${escapeHtml(it.detail)}</div>
+          </div>`;
+      })
+      .join('');
+  };
+  render();
+
+  items[0].ok = Boolean(window.isSecureContext);
+  items[0].detail = items[0].ok
+    ? `当前为安全上下文 (${location.origin})`
+    : '非安全上下文（HTTP），无法激活 Scramjet，请改用 HTTPS 或 localhost 访问';
+  render();
+
+  const swSupported = 'serviceWorker' in navigator;
+  const swActive = swSupported && Boolean(navigator.serviceWorker.controller);
+  items[1].ok = swActive;
+  items[1].detail = !swSupported
+    ? '当前浏览器不支持 Service Worker'
+    : (swActive ? 'Service Worker 已激活并接管页面' : 'Service Worker 未接管（通常因非安全上下文或未信任自签证书）');
+  render();
+
+  try {
+    const probeUrl = location.protocol === 'https:' ? '/healthz' : httpsShellUrl() + 'healthz';
+    const resp = await fetch(probeUrl, { cache: 'no-store' });
+    items[2].ok = resp.ok;
+    items[2].detail = resp.ok ? `HTTPS 探活成功 (${probeUrl})` : `HTTPS 返回异常 HTTP ${resp.status}`;
+  } catch (err) {
+    items[2].ok = false;
+    items[2].detail = '无法访问 HTTPS 入口（请检查 18921 端口连通性或是否已信任根证书）';
+  }
+  render();
+
+  await new Promise((resolve) => {
+    try {
+      const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const ws = new WebSocket(`${scheme}//${location.host}/wisp/`);
+      const timer = setTimeout(() => {
+        try { ws.close(); } catch {}
+        items[3].ok = false;
+        items[3].detail = 'WebSocket 连接超时（请检查反向代理是否开启 WebSocket 支持）';
+        resolve();
+      }, 3500);
+      ws.onopen = () => {
+        clearTimeout(timer);
+        items[3].ok = true;
+        items[3].detail = 'Wisp WebSocket 握手成功';
+        try { ws.close(); } catch {}
+        resolve();
+      };
+      ws.onerror = () => {
+        clearTimeout(timer);
+        items[3].ok = false;
+        items[3].detail = 'Wisp WebSocket 握手失败（反代需开启 WebSocket，或检查 AUTH_TOKEN）';
+        resolve();
+      };
+    } catch {
+      items[3].ok = false;
+      items[3].detail = '无法建立 WebSocket 连接';
+      resolve();
+    }
+  });
+  render();
+  if (hint) {
+    hint.textContent = items.every((i) => i.ok) ? '全部检测通过，Scramjet 可满血运行' : '存在异常项，请按提示排查';
+  }
+}
+
+function openDiagnosticsModal() {
+  const modal = document.getElementById('diagModal');
+  if (!modal) return;
+  modal.classList.add('open');
+  runDiagnostics();
+}
+
+function closeDiagnosticsModal() {
+  const modal = document.getElementById('diagModal');
+  if (modal) modal.classList.remove('open');
+}
+
+document.getElementById('diagCloseBtn').onclick = closeDiagnosticsModal;
+document.getElementById('diagOkBtn').onclick = closeDiagnosticsModal;
+document.getElementById('diagRetryBtn').onclick = runDiagnostics;
 
 // 启动初始化
 (async function init() {

@@ -59,6 +59,15 @@ start_app() {
 
     mkdir -p "$VAR_DIR/sessions" 2>/dev/null || true
 
+    # Rotate $LOG_FILE if it exceeds 5 MB to prevent unbounded disk growth
+    if [ -f "$LOG_FILE" ]; then
+        local log_size
+        log_size=$(wc -c < "$LOG_FILE" 2>/dev/null || echo 0)
+        if [ "$log_size" -gt 5242880 ]; then
+            mv -f "$LOG_FILE" "${LOG_FILE}.1" 2>/dev/null || : > "$LOG_FILE" 2>/dev/null || true
+        fi
+    fi
+
     echo "[fn-browser] Starting with Node: $NODE_BIN" >> "$LOG_FILE" 2>/dev/null || true
     PORT="$PORT" \
     DATA_DIR="$DATA_DIR" \
