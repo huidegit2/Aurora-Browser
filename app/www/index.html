@@ -1089,6 +1089,53 @@
     display: none;
   }
   .dl-btn.active .dl-dot { display: block; }
+  .dl-badge {
+    position: absolute;
+    top: 2px;
+    right: 2px;
+    min-width: 14px;
+    height: 14px;
+    padding: 0 3px;
+    border-radius: 999px;
+    background: var(--accent);
+    color: #fff;
+    font-size: 9.5px;
+    font-weight: 600;
+    line-height: 14px;
+    text-align: center;
+    display: none;
+  }
+  .dl-btn.active .dl-badge { display: block; }
+  .dl-btn.active .dl-dot { display: none; }
+  .dl-popover {
+    position: fixed;
+    top: 84px;
+    right: 12px;
+    width: min(390px, calc(100vw - 20px));
+    max-height: min(520px, calc(100vh - 120px));
+    background: var(--bg-toolbar);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    box-shadow: var(--shadow-md);
+    display: none;
+    flex-direction: column;
+    overflow: hidden;
+    z-index: 150;
+  }
+  .dl-popover.open { display: flex; }
+  .dl-pop-head {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    font-size: 13.5px;
+    font-weight: 600;
+  }
+  .dl-pop-body {
+    overflow-y: auto;
+    flex: 1;
+  }
   .dl-toolbar {
     padding: 10px 12px;
     border-bottom: 1px solid var(--border);
@@ -1327,6 +1374,7 @@
     <button class="nav-btn dl-btn" id="downloadsBtn" title="下载管理 (Ctrl+J)">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v12"/><path d="M7 10l5 5 5-5"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
       <span class="dl-dot"></span>
+      <span class="dl-badge" id="dlBadge"></span>
     </button>
     <button class="nav-btn" id="sidebarBtn" title="侧边栏：历史 / 书签 / 下载 (Ctrl+H)">
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M15 4v16"/></svg>
@@ -1365,7 +1413,6 @@
       <div class="sidebar-head">
         <button class="side-tab" data-panel="history">历史</button>
         <button class="side-tab" data-panel="bookmarks">书签</button>
-        <button class="side-tab" data-panel="downloads">下载</button>
         <span class="spacer"></span>
         <button class="side-close" id="sideCloseBtn" title="关闭侧边栏">×</button>
       </div>
@@ -1385,6 +1432,7 @@
   <!-- 主菜单 -->
   <div class="menu-popup" id="menuPopup">
     <button class="menu-item" data-action="newtab"><span>新建标签页</span><span class="menu-key">Ctrl+T</span></button>
+    <button class="menu-item" data-action="reopen-tab"><span>恢复关闭的标签页</span><span class="menu-key">Ctrl+Shift+T</span></button>
     <button class="menu-item" data-action="history"><span>历史记录</span><span class="menu-key">Ctrl+H</span></button>
     <button class="menu-item" data-action="bookmarks-panel"><span>书签</span></button>
     <button class="menu-item" data-action="downloads-panel"><span>下载管理</span><span class="menu-key">Ctrl+J</span></button>
@@ -1435,6 +1483,15 @@
     <span class="engine-badge" id="engineBadge" title="当前代理内核状态">检测中...</span>
     <span class="status-text" id="statusText"></span>
     <button class="status-zoom" id="statusZoom" title="页面缩放，点击重置为 100%">100%</button>
+  </div>
+
+  <!-- Chrome 风格独立下载气泡浮窗 -->
+  <div class="dl-popover" id="downloadPopover">
+    <div class="dl-pop-head">
+      <span>最近下载内容</span>
+      <button class="side-close" id="dlPopCloseBtn" title="关闭">×</button>
+    </div>
+    <div class="dl-pop-body" id="downloadPopoverBody"></div>
   </div>
 
   <!-- 飞牛存储目录选择器 -->
@@ -1986,11 +2043,23 @@ function createTab(initialUrl = 'fn://newtab') {
   return id;
 }
 
+const closedTabUrls = [];
+
+function reopenLastClosedTab() {
+  const url = closedTabUrls.pop();
+  if (url) createTab(url);
+}
+
 function closeTab(id, e) {
   if (e) e.stopPropagation();
   const idx = state.tabs.findIndex((t) => t.id === id);
   if (idx === -1) return;
 
+  const closing = state.tabs[idx];
+  if (closing.url && closing.url !== 'fn://newtab') {
+    closedTabUrls.push(closing.url);
+    if (closedTabUrls.length > 20) closedTabUrls.shift();
+  }
   state.tabs.splice(idx, 1);
   const pane = document.getElementById(`pane-${id}`);
   if (pane) pane.remove();
@@ -2476,7 +2545,10 @@ document.querySelectorAll('.side-tab').forEach((btn) => {
   };
 });
 document.getElementById('sideCloseBtn').onclick = () => closeSidebar();
-document.getElementById('downloadsBtn').onclick = () => toggleSidebar('downloads');
+document.getElementById('downloadsBtn').onclick = (e) => {
+  e.stopPropagation();
+  toggleDownloadPopover();
+};
 document.getElementById('sidebarBtn').onclick = () => toggleSidebar('history');
 
 async function renderSidebarPanel() {
@@ -2565,8 +2637,7 @@ async function renderSidebarPanel() {
     return;
   }
 
-  // 下载管理（NAS 服务端直下 + 飞牛存储目录选择）
-  await renderDownloadsPanel(body);
+  // 书签/历史之外不再合并下载
 }
 
 let downloadsPollTimer = null;
@@ -2580,15 +2651,46 @@ function formatBytes(bytes) {
   return `${(n / 1024 / 1024 / 1024).toFixed(2)} GB`;
 }
 
-function updateDownloadIndicator(items) {
-  const active = (items || []).some((d) => d.status === 'downloading');
+function fileIconForName(name) {
+  const ext = (String(name || '').split('.').pop() || '').toLowerCase();
+  if (['mp4', 'mkv', 'avi', 'mov', 'webm', 'flv'].includes(ext)) return '🎬';
+  if (['mp3', 'flac', 'wav', 'aac', 'ogg'].includes(ext)) return '🎵';
+  if (['zip', 'rar', '7z', 'tar', 'gz', 'tgz'].includes(ext)) return '🗜';
+  if (['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg'].includes(ext)) return '🖼';
+  if (['exe', 'msi', 'dmg', 'pkg', 'deb', 'rpm', 'apk', 'fpk', 'iso'].includes(ext)) return '📦';
+  return '📄';
+}
+
+function isDownloadPopoverOpen() {
+  const pop = document.getElementById('downloadPopover');
+  return pop && pop.classList.contains('open');
+}
+
+function toggleDownloadPopover(force) {
+  const pop = document.getElementById('downloadPopover');
+  if (!pop) return;
+  const open = typeof force === 'boolean' ? force : !pop.classList.contains('open');
+  pop.classList.toggle('open', open);
   const btn = document.getElementById('downloadsBtn');
+  if (btn) btn.classList.toggle('on', open);
+  if (open) {
+    toggleMenu(false);
+    renderDownloadPopover();
+  }
+}
+
+function updateDownloadIndicator(items) {
+  const activeCount = (items || []).filter((d) => d.status === 'downloading').length;
+  const active = activeCount > 0;
+  const btn = document.getElementById('downloadsBtn');
+  const badge = document.getElementById('dlBadge');
   if (btn) btn.classList.toggle('active', active);
+  if (badge) badge.textContent = active ? String(activeCount) : '';
   if (active && !downloadsPollTimer) {
     downloadsPollTimer = setInterval(async () => {
       await fetchDownloadsState();
-      if (state.ui.sidebarOpen && state.ui.sidebarPanel === 'downloads') {
-        const body = document.getElementById('sidebarBody');
+      if (isDownloadPopoverOpen()) {
+        const body = document.getElementById('downloadPopoverBody');
         if (body && (!document.activeElement || !body.contains(document.activeElement) || document.activeElement.tagName !== 'INPUT')) {
           drawDownloadsBody(body);
         }
@@ -2628,9 +2730,9 @@ async function startNasDownload(url, filename = '', openPanel = false) {
     setStatusText(`已开始下载到 NAS：${data.filename}`);
     await fetchDownloadsState();
     if (openPanel) {
-      openSidebar('downloads');
-    } else if (state.ui.sidebarOpen && state.ui.sidebarPanel === 'downloads') {
-      drawDownloadsBody(document.getElementById('sidebarBody'));
+      toggleDownloadPopover(true);
+    } else if (isDownloadPopoverOpen()) {
+      drawDownloadsBody(document.getElementById('downloadPopoverBody'));
     }
   } catch (err) {
     setStatusText(`下载请求失败：${err.message}`);
@@ -2641,6 +2743,8 @@ function drawDownloadsBody(body) {
   if (!body) return;
   const dir = downloadsCache.downloadDir || state.settings.downloadDir || '';
   const items = downloadsCache.items || [];
+  const activeTab = getActiveTab();
+  const canDlCurrent = activeTab && activeTab.url && /^https?:\/\//i.test(activeTab.url);
   const listHtml = items.length
     ? items
         .map((d) => {
@@ -2650,15 +2754,16 @@ function drawDownloadsBody(body) {
             : formatBytes(d.receivedBytes);
           const statusMap = {
             downloading: d.speedBps ? `${formatBytes(d.speedBps)}/s` : '下载中…',
-            completed: '已完成',
+            completed: '✓ 已存到 NAS',
             failed: `失败：${d.error || '未知错误'}`,
             cancelled: '已取消'
           };
+          const statusColor = d.status === 'completed' ? '#00b42a' : (d.status === 'failed' ? '#e5484d' : 'var(--text-muted)');
           return `
             <div class="dl-item">
               <div class="dl-item-head">
-                <span class="dl-name" title="${escapeHtml(d.filePath || d.filename)}">${escapeHtml(d.filename)}</span>
-                <span class="fs-tag">${escapeHtml(statusMap[d.status] || d.status)}</span>
+                <span class="dl-name" title="${escapeHtml(d.filePath || d.filename)}">${fileIconForName(d.filename)} ${escapeHtml(d.filename)}</span>
+                <span class="fs-tag" style="color:${statusColor};flex-shrink:0;">${escapeHtml(statusMap[d.status] || d.status)}</span>
               </div>
               ${d.status === 'downloading' ? `<div class="dl-bar"><div class="dl-bar-fill" style="width:${d.totalBytes ? pct : 35}%"></div></div>` : ''}
               <div class="dl-meta">
@@ -2672,8 +2777,14 @@ function drawDownloadsBody(body) {
                 ${d.status === 'completed'
                   ? `<a class="dl-link" href="${escapeHtml(withToken('/api/downloads/' + encodeURIComponent(d.id) + '/file'))}">取回本地</a>`
                   : ''}
+                ${(d.status === 'failed' || d.status === 'cancelled') && d.url
+                  ? `<button class="dl-link" data-dl-retry="${escapeHtml(d.url)}">重试</button>`
+                  : ''}
                 ${d.status !== 'downloading'
                   ? `<button class="dl-link danger" data-dl-del="${escapeHtml(d.id)}">删除记录</button>`
+                  : ''}
+                ${d.status === 'completed'
+                  ? `<button class="dl-link danger" data-dl-delfile="${escapeHtml(d.id)}">删文件</button>`
                   : ''}
               </div>
             </div>`;
@@ -2692,7 +2803,10 @@ function drawDownloadsBody(body) {
         <input type="text" id="dlNewUrlInput" placeholder="粘贴直链 URL 下载到 NAS..." autocomplete="off" spellcheck="false" />
         <button class="btn" id="dlStartBtn" type="button">下载</button>
       </div>
-      ${items.some((d) => d.status !== 'downloading') ? '<div style="display:flex;justify-content:flex-end;"><button class="dl-link" id="dlClearDoneBtn" type="button">清空已完成记录</button></div>' : ''}
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        ${canDlCurrent ? '<button class="dl-link" id="dlCurrentTabBtn" type="button">+ 下载当前页链接</button>' : '<span></span>'}
+        ${items.some((d) => d.status !== 'downloading') ? '<button class="dl-link" id="dlClearDoneBtn" type="button">清空已完成</button>' : ''}
+      </div>
     </div>
     <div id="dlListWrap">${listHtml}</div>
   `;
@@ -2709,6 +2823,10 @@ function drawDownloadsBody(body) {
   urlInput.onkeydown = (e) => {
     if (e.key === 'Enter') startBtn.click();
   };
+  const curBtn = document.getElementById('dlCurrentTabBtn');
+  if (curBtn && activeTab) {
+    curBtn.onclick = () => startNasDownload(activeTab.url, '', false);
+  }
   const clearBtn = document.getElementById('dlClearDoneBtn');
   if (clearBtn) {
     clearBtn.onclick = async () => {
@@ -2727,6 +2845,9 @@ function drawDownloadsBody(body) {
       drawDownloadsBody(body);
     };
   });
+  body.querySelectorAll('[data-dl-retry]').forEach((btn) => {
+    btn.onclick = () => startNasDownload(btn.getAttribute('data-dl-retry'), '', false);
+  });
   body.querySelectorAll('[data-dl-del]').forEach((btn) => {
     btn.onclick = async () => {
       await fetch(`/api/downloads/${encodeURIComponent(btn.getAttribute('data-dl-del'))}`, {
@@ -2737,13 +2858,27 @@ function drawDownloadsBody(body) {
       drawDownloadsBody(body);
     };
   });
+  body.querySelectorAll('[data-dl-delfile]').forEach((btn) => {
+    btn.onclick = async () => {
+      await fetch(`/api/downloads/${encodeURIComponent(btn.getAttribute('data-dl-delfile'))}?deleteFile=1`, {
+        method: 'DELETE',
+        headers: authHeaders()
+      });
+      await fetchDownloadsState();
+      drawDownloadsBody(body);
+    };
+  });
 }
 
-async function renderDownloadsPanel(body) {
+async function renderDownloadPopover() {
+  const body = document.getElementById('downloadPopoverBody');
+  if (!body) return;
   body.innerHTML = '<div class="side-empty">加载中…</div>';
   await fetchDownloadsState();
   drawDownloadsBody(body);
 }
+
+document.getElementById('dlPopCloseBtn').onclick = () => toggleDownloadPopover(false);
 
 // 飞牛存储目录选择器
 let pickerCurrentDir = '';
@@ -2873,8 +3008,8 @@ document.getElementById('fsConfirmBtn').onclick = async () => {
     state.settings.downloadDir = data.downloadDir;
     downloadsCache.downloadDir = data.downloadDir;
     closeFolderPicker();
-    if (state.ui.sidebarOpen && state.ui.sidebarPanel === 'downloads') {
-      drawDownloadsBody(document.getElementById('sidebarBody'));
+    if (isDownloadPopoverOpen()) {
+      drawDownloadsBody(document.getElementById('downloadPopoverBody'));
     }
   } catch (err) {
     if (errEl) errEl.textContent = err.message;
@@ -3227,6 +3362,9 @@ document.getElementById('menuPopup').addEventListener('click', (e) => {
     case 'newtab':
       createTab('fn://newtab');
       break;
+    case 'reopen-tab':
+      reopenLastClosedTab();
+      break;
     case 'history':
       openSidebar('history');
       break;
@@ -3234,7 +3372,7 @@ document.getElementById('menuPopup').addEventListener('click', (e) => {
       openSidebar('bookmarks');
       break;
     case 'downloads-panel':
-      openSidebar('downloads');
+      toggleDownloadPopover(true);
       break;
     case 'toggle-bmbar':
       setBookmarksBarVisible(!state.ui.showBookmarksBar);
@@ -3265,6 +3403,18 @@ document.addEventListener('click', (e) => {
   const menu = document.getElementById('menuPopup');
   if (menu.classList.contains('open') && !menu.contains(e.target) && e.target.id !== 'menuBtn') {
     toggleMenu(false);
+  }
+  const dlPop = document.getElementById('downloadPopover');
+  const dlBtn = document.getElementById('downloadsBtn');
+  const folderModal = document.getElementById('folderModal');
+  if (
+    dlPop &&
+    dlPop.classList.contains('open') &&
+    !dlPop.contains(e.target) &&
+    !(dlBtn && dlBtn.contains(e.target)) &&
+    !(folderModal && folderModal.classList.contains('open'))
+  ) {
+    toggleDownloadPopover(false);
   }
   const dd = document.getElementById('omniDropdown');
   if (omni.open && !dd.contains(e.target) && e.target.id !== 'urlInput') {
@@ -3407,7 +3557,10 @@ window.addEventListener('keydown', (e) => {
   const key = e.key.toLowerCase();
   const tab = getActiveTab();
 
-  if (mod && key === 't') {
+  if (mod && e.shiftKey && key === 't') {
+    e.preventDefault();
+    reopenLastClosedTab();
+  } else if (mod && key === 't') {
     e.preventDefault();
     createTab('fn://newtab');
   } else if (mod && key === 'w') {
@@ -3426,7 +3579,7 @@ window.addEventListener('keydown', (e) => {
     toggleSidebar('history');
   } else if (mod && key === 'j') {
     e.preventDefault();
-    toggleSidebar('downloads');
+    toggleDownloadPopover();
   } else if (mod && e.shiftKey && key === 'b') {
     e.preventDefault();
     setBookmarksBarVisible(!state.ui.showBookmarksBar);
@@ -3465,6 +3618,7 @@ window.addEventListener('keydown', (e) => {
   } else if (e.key === 'Escape') {
     if (document.getElementById('findBar').classList.contains('open')) closeFindBar();
     toggleMenu(false);
+    toggleDownloadPopover(false);
   }
 });
 

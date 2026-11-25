@@ -1,0 +1,44 @@
+{
+  "schema_version": "2",
+  "source_info": {
+    "name": "极光浏览器应用源",
+    "author": "huidegit2",
+    "homepage": "https://github.com/huidegit2/Aurora-Browser",
+    "description": "极光浏览器 Aurora · 飞牛 fnOS 原生网页代理浏览器（FnDepot V2 外部应用源）"
+  },
+  "apps": {
+    "fn-browser": {
+      "display_name": "极光浏览器",
+      "desc": "极光浏览器 Aurora · 飞牛 fnOS 原生网页代理浏览器，搭载 Scramjet 满血内核，支持自定义外部 TLS 证书、Chrome 风格独立下载气泡浮窗、飞牛存储目录直下与多标签页管理；提供 ARM64 与 x86_64 双架构包。",
+      "platform": ["arm", "x86"],
+      "categories": ["系统工具"],
+      "icon_url": "./ICON_256.PNG",
+      "readme_url": "./README.md",
+      "bug_report_url": "https://github.com/huidegit2/Aurora-Browser/issues",
+      "maintainer": "huidegit2",
+      "maintainer_url": "https://github.com/huidegit2/Aurora-Browser",
+      "run_as": "package",
+      "install_type": "",
+      "is_docker": false,
+      "service_port": "18920",
+      "releases": {
+        "1.0.15": {
+          "changelog": "飞牛桌面入口改为新标签页打开（type=url），解决 iframe 嵌套黑屏与拦截问题；圆角抗锯齿图标；线性矢量 SVG 工具栏；/vol1 权限容错与 NAS 下载管理。",
+          "updated_at": "2026-11-25T14:38:33+08:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.15/fn-browser-arm64.fpk",
+              "sha256": "67ce0a1f97f2c50b219c73c26a1db796adc22536e9702885008cf96d7b9e3ec8",
+              "size": 43984706
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.15/fn-browser-x86_64.fpk",
+              "sha256": "ad65c5459a313f7f81bb43eac20140ed50670a72000671a1fe2b28b985035fd2",
+              "size": 44022553
+            }
+          }
+        }
+      }
+    }
+  }
+}

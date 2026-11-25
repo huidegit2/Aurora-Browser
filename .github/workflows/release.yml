@@ -69,7 +69,49 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           gh release create "v${{ steps.ver.outputs.version }}" \
-            --title "极光 Aurora v${{ steps.ver.outputs.version }}" \
+            --title "极光浏览器 Aurora v${{ steps.ver.outputs.version }}" \
             --notes-file RELEASE_NOTES.md \
             dist/fn-browser-arm64.fpk \
             dist/fn-browser-x86_64.fpk
+
+      - name: Update FnDepot fnpack.json
+        if: ${{ !inputs.dry_run }}
+        run: |
+          VERSION="${{ steps.ver.outputs.version }}"
+          ARM_SHA="$(sha256sum dist/fn-browser-arm64.fpk | awk '{print $1}')"
+          ARM_SIZE="$(stat -c '%s' dist/fn-browser-arm64.fpk)"
+          X86_SHA="$(sha256sum dist/fn-browser-x86_64.fpk | awk '{print $1}')"
+          X86_SIZE="$(stat -c '%s' dist/fn-browser-x86_64.fpk)"
+          CHANGELOG_TEXT="$(cat RELEASE_NOTES.md)"
+          NOW_ISO="$(date -Iseconds)"
+          python3 - "$VERSION" "$ARM_SHA" "$ARM_SIZE" "$X86_SHA" "$X86_SIZE" "$NOW_ISO" "$CHANGELOG_TEXT" <<'PY'
+          import json, sys
+          ver, arm_sha, arm_size, x86_sha, x86_size, now_iso, changelog = sys.argv[1:8]
+          with open("fnpack.json", "r", encoding="utf-8") as f:
+              data = json.load(f)
+          app = data["apps"]["fn-browser"]
+          releases = app.setdefault("releases", {})
+          releases[ver] = {
+              "changelog": changelog.strip() or f"极光浏览器 Aurora v{ver}",
+              "updated_at": now_iso,
+              "packages": {
+                  "arm": {
+                      "download_url": f"https://github.com/huidegit2/Aurora-Browser/releases/download/v{ver}/fn-browser-arm64.fpk",
+                      "sha256": arm_sha,
+                      "size": int(arm_size),
+                  },
+                  "x86": {
+                      "download_url": f"https://github.com/huidegit2/Aurora-Browser/releases/download/v{ver}/fn-browser-x86_64.fpk",
+                      "sha256": x86_sha,
+                      "size": int(x86_size),
+                  },
+              },
+          }
+          with open("fnpack.json", "w", encoding="utf-8") as f:
+              json.dump(data, f, ensure_ascii=False, indent=2)
+              f.write("\n")
+          PY
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add fnpack.json
+          git diff --cached --quiet || (git commit -m "chore: update fnpack.json for v${VERSION}" && git push origin HEAD:main)
