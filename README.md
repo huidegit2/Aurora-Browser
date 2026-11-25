@@ -28,12 +28,26 @@
 | Scramjet | HTTPS + Service Worker | 外网现代站点 | 活跃维护，主力 |
 | 轻量直连 | 仅 Node.js | 内网设备、HTTP 入口兜底 | 默认可用 |
 
-Scramjet 依赖浏览器的安全上下文（受信任的 HTTPS 或 `http://localhost`）：
+Scramjet 依赖浏览器的安全上下文（受信任的 HTTPS 或 `http://localhost`），**未信任的自签证书或纯 HTTP 会导致浏览器禁用 Service Worker，无法激活满血内核**：
 
-1. **已有域名证书（推荐）**：
-   - 方式一：在飞牛「反向代理」中将你的 HTTPS 域名反代到 `http://127.0.0.1:18920`（需开启 WebSocket）；
-   - 方式二：将证书与私钥放到应用数据目录 `tls/custom.crt.pem` 与 `tls/custom.key.pem`（或设置环境变量 `TLS_CERT_PATH` / `TLS_KEY_PATH`），重启应用即可让 `18921` 端口直接使用你的受信任证书，免装根证书。
-2. **局域网 IP 访问**：使用 `18921` 端口并通过菜单「HTTPS 全功能」下载并信任本地根证书。
+### 方式一：局域网 IP 使用自带根证书（`18921` 端口，每台设备仅需装一次）
+
+1. 打开 `https://<NAS-IP>:18921`（首次浏览器会提示不安全，先点“高级 -> 继续前往”进入外壳），或点击页面顶部的「在新窗口以 HTTPS 打开」。
+2. 点击右上角菜单 **「⋮」 -> 「HTTPS 全功能」** 下载对应设备的根证书：
+   - **Windows / Android**：下载 [`aurora-ca.crt`](https://<NAS-IP>:18921/aurora-ca.crt)
+     - *Windows*：双击证书 ->「安装证书」->「本地计算机」->「将所有的证书都放入下列存储」-> 浏览选择 **「受信任的根证书颁发机构」** -> 完成。
+     - *Android*：系统设置搜索「安装证书」->「CA 证书」-> 选择下载的 `.crt` 文件。
+   - **iPhone / iPad**：用 Safari 下载 [`aurora-ca.mobileconfig`](https://<NAS-IP>:18921/aurora-ca.mobileconfig) ->「设置 -> 通用 -> VPN 与设备管理」安装描述文件 -> 再到「设置 -> 通用 -> 关于本机 -> 证书信任设置」开启完全信任。
+3. 安装信任后刷新 `https://<NAS-IP>:18921`，地址栏恢复安全锁，左下角即显示 **Scramjet 内核**。
+
+### 方式二：已有域名证书（全设备免装根证书，推荐）
+
+- **飞牛反向代理**：在飞牛「反向代理」将你的 HTTPS 域名反代到 `http://127.0.0.1:18920`（务必开启 **WebSocket** 支持）；
+- **直接挂载证书**：将证书与私钥放到应用数据目录 `tls/custom.crt.pem` 与 `tls/custom.key.pem`（或设置环境变量 `TLS_CERT_PATH` / `TLS_KEY_PATH`），重启应用即可让 `18921` 端口直接使用你的受信任证书。
+
+### 方式三：电脑端免证书临时方案
+
+- 连接局域网或 WireGuard 后执行 `ssh -N -L 18920:127.0.0.1:18920 用户名@NAS_IP`，浏览器打开 `http://localhost:18920` 即可零证书激活 Scramjet。
 
 ## NAS 下载与飞牛目录授权
 

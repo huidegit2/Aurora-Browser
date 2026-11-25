@@ -9,7 +9,7 @@
   "apps": {
     "fn-browser": {
       "display_name": "极光浏览器",
-      "desc": "极光浏览器 Aurora · 飞牛 fnOS 原生网页代理浏览器，搭载 Scramjet 满血内核，支持自定义外部 TLS 证书、Chrome 风格独立下载气泡浮窗、飞牛存储目录直下与多标签页管理；提供 ARM64 与 x86_64 双架构包。",
+      "desc": "极光浏览器 Aurora · 飞牛 fnOS 原生网页代理浏览器，搭载 Scramjet 满血内核，支持 Chrome 风格下载气泡浮窗、飞牛存储目录直下与多标签页管理。\n\n【证书与满血内核说明】Scramjet 内核依赖浏览器安全上下文（受信任的 HTTPS）：\n1. 局域网 IP 访问（18921 端口）：打开右上角菜单「HTTPS 全功能」，下载并安装信任根证书（Windows/Android：/aurora-ca.crt；iPhone/iPad：/aurora-ca.mobileconfig），仅需安装一次即可消除「不安全」提示并激活满血内核。\n2. 已有域名证书（免装根证书）：可在飞牛「反向代理」将 HTTPS 域名反代至 18920 端口（开启 WebSocket），或将证书放入数据目录 tls/custom.crt.pem 与 custom.key.pem。",
       "platform": [
         "arm",
         "x86"
