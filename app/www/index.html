@@ -1429,7 +1429,7 @@
     <button class="find-btn" id="findCloseBtn" title="关闭 (Esc)">×</button>
   </div>
 
-  <!-- 主菜单 -->
+  <!-- 主菜单（一级菜单） -->
   <div class="menu-popup" id="menuPopup">
     <button class="menu-item" data-action="newtab"><span>新建标签页</span><span class="menu-key">Ctrl+T</span></button>
     <button class="menu-item" data-action="reopen-tab"><span>恢复关闭的标签页</span><span class="menu-key">Ctrl+Shift+T</span></button>
@@ -1447,39 +1447,8 @@
     <button class="menu-item" data-action="find"><span>在页面中查找</span><span class="menu-key">Ctrl+F</span></button>
     <button class="menu-item" data-action="theme"><span>切换深浅色主题</span></button>
     <button class="menu-item" data-action="diagnostics"><span>连接自检</span></button>
-    <div class="menu-https" style="padding-top:6px;padding-bottom:6px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;">
-        <span style="font-size:12px;color:var(--text-muted);">默认搜索引擎</span>
-        <select id="menuSearchEngine" style="font-size:12px;padding:3px 8px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);">
-          <option value="bing">必应 Bing</option>
-          <option value="baidu">百度</option>
-          <option value="google">Google</option>
-          <option value="duckduckgo">DuckDuckGo</option>
-        </select>
-      </div>
-      <div class="https-row" style="margin-top:8px;">
-        <input id="authPassInput" type="password" placeholder="访问密码（留空关闭保护）" autocomplete="new-password" spellcheck="false">
-        <button type="button" id="saveAuthPassBtn" data-action="save-auth-pass">保存</button>
-      </div>
-      <div class="https-note" id="authPassStatus">公网暴露时建议设置访问密码。</div>
-    </div>
     <div class="menu-sep"></div>
-    <div class="menu-https" id="menuHttps">
-      <div class="https-title">HTTPS 全功能</div>
-      <div id="httpsDesc">通过 HTTPS 地址打开极光浏览器可激活 Scramjet 内核（站点与视频兼容性最佳）。若使用自带证书，先在本设备安装并信任根证书；若已配置外部证书（或反向代理），可直接打开 HTTPS 地址：</div>
-      <div class="https-links">
-        <a id="httpsUrlLink" href="#" target="_blank" rel="noopener">HTTPS 地址检测中…</a>
-        <div id="httpsCaExtras" style="display:flex;flex-direction:column;gap:2px;">
-          <a href="/aurora-ca.mobileconfig">下载根证书（iPhone / iPad）</a>
-          <a href="/aurora-ca.crt">下载根证书（Windows / Android）</a>
-          <div class="https-row" style="margin-top:6px;">
-            <input id="certNamesInput" type="text" placeholder="额外域名，如 nas.example.com" autocomplete="off" spellcheck="false">
-            <button type="button" id="saveCertNamesBtn" data-action="save-cert-names">保存</button>
-          </div>
-          <div class="https-note">额外域名会一并写入服务器证书，保存后重启极光浏览器应用生效。</div>
-        </div>
-      </div>
-    </div>
+    <button class="menu-item" data-action="open-settings"><span>设置</span><span class="menu-key">›</span></button>
     <div class="menu-sep"></div>
     <div class="menu-info" id="menuEngineInfo">内核状态检测中…</div>
   </div>
@@ -1498,6 +1467,79 @@
       <button class="side-close" id="dlPopCloseBtn" title="关闭">×</button>
     </div>
     <div class="dl-pop-body" id="downloadPopoverBody"></div>
+  </div>
+
+  <!-- 二级设置弹窗 -->
+  <div class="modal-mask" id="settingsModal">
+    <div class="modal-card" style="width:min(520px,95vw);">
+      <div class="modal-head">
+        <span>设置</span>
+        <button class="side-close" id="settingsCloseBtn" title="关闭">×</button>
+      </div>
+      <div class="modal-body" style="gap:14px;">
+        <div style="border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:10px;">
+          <div style="font-size:13px;font-weight:600;">外观与搜索</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+            <span style="font-size:12.5px;color:var(--text-muted);">默认搜索引擎</span>
+            <select id="menuSearchEngine" style="font-size:12.5px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);">
+              <option value="bing">必应 Bing</option>
+              <option value="baidu">百度</option>
+              <option value="google">Google</option>
+              <option value="duckduckgo">DuckDuckGo</option>
+            </select>
+          </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+            <span style="font-size:12.5px;color:var(--text-muted);">界面主题</span>
+            <select id="settingsThemeSelect" style="font-size:12.5px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);">
+              <option value="system">跟随系统</option>
+              <option value="light">浅色模式</option>
+              <option value="dark">深色模式</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px;">
+          <div style="font-size:13px;font-weight:600;">安全与访问控制</div>
+          <div class="https-row">
+            <input id="authPassInput" type="password" placeholder="设置访问密码（留空保存即关闭保护）" autocomplete="new-password" spellcheck="false" style="flex:1;height:30px;padding:0 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:12.5px;">
+            <button type="button" class="btn" id="saveAuthPassBtn">保存</button>
+          </div>
+          <div class="https-note" id="authPassStatus" style="font-size:11.5px;color:var(--text-muted);">公网暴露时建议设置访问密码。</div>
+        </div>
+
+        <div style="border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px;">
+          <div style="font-size:13px;font-weight:600;">下载与存储</div>
+          <div class="dl-dir-row">
+            <span>默认目录</span>
+            <span class="dl-dir-path" id="settingsDownloadDir" title="">加载中…</span>
+            <button class="btn" id="settingsPickDirBtn" type="button">更改目录</button>
+          </div>
+        </div>
+
+        <div style="border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px;" id="menuHttps">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <span style="font-size:13px;font-weight:600;">HTTPS 与满血内核 (Scramjet)</span>
+            <button class="btn" id="settingsDiagBtn" type="button">连接自检</button>
+          </div>
+          <div id="httpsDesc" style="font-size:12px;color:var(--text-muted);line-height:1.5;">通过 HTTPS 地址打开极光浏览器可激活 Scramjet 内核（站点与视频兼容性最佳）。若使用自带证书，先在本设备安装并信任根证书；若已配置外部证书（或反向代理），可直接打开 HTTPS 地址：</div>
+          <div class="https-links" style="display:flex;flex-direction:column;gap:4px;font-size:12px;">
+            <a id="httpsUrlLink" href="#" target="_blank" rel="noopener">HTTPS 地址检测中…</a>
+            <div id="httpsCaExtras" style="display:flex;flex-direction:column;gap:4px;">
+              <a href="/aurora-ca.mobileconfig">下载根证书（iPhone / iPad）</a>
+              <a href="/aurora-ca.crt">下载根证书（Windows / Android）</a>
+              <div class="https-row" style="margin-top:4px;display:flex;gap:6px;">
+                <input id="certNamesInput" type="text" placeholder="额外域名，如 nas.example.com" autocomplete="off" spellcheck="false" style="flex:1;height:30px;padding:0 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);font-size:12px;">
+                <button type="button" class="btn" id="saveCertNamesBtn">保存</button>
+              </div>
+              <div class="https-note" style="font-size:11.5px;color:var(--text-muted);">额外域名会一并写入服务器证书，保存后重启极光浏览器应用生效。</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="modal-foot" style="justify-content:flex-end;">
+        <button class="btn" id="settingsOkBtn" type="button" style="background:var(--accent);color:#fff;border-color:var(--accent);">完成</button>
+      </div>
+    </div>
   </div>
 
   <!-- 访问密码解锁弹窗 -->
@@ -3059,6 +3101,11 @@ document.getElementById('fsConfirmBtn').onclick = async () => {
     state.settings.downloadDir = data.downloadDir;
     downloadsCache.downloadDir = data.downloadDir;
     closeFolderPicker();
+    const sDir = document.getElementById('settingsDownloadDir');
+    if (sDir) {
+      sDir.textContent = data.downloadDir;
+      sDir.title = data.downloadDir;
+    }
     if (isDownloadPopoverOpen()) {
       drawDownloadsBody(document.getElementById('downloadPopoverBody'));
     }
@@ -3400,6 +3447,50 @@ if (menuSearchEngineEl) {
   });
 }
 
+function openSettingsModal() {
+  const modal = document.getElementById('settingsModal');
+  if (!modal) return;
+  const menuSe = document.getElementById('menuSearchEngine');
+  if (menuSe) menuSe.value = state.settings.searchEngine || 'bing';
+  const themeSel = document.getElementById('settingsThemeSelect');
+  if (themeSel) themeSel.value = state.settings.theme || 'system';
+  const dlDirEl = document.getElementById('settingsDownloadDir');
+  if (dlDirEl) {
+    const dir = state.settings.downloadDir || '默认目录';
+    dlDirEl.textContent = dir;
+    dlDirEl.title = dir;
+  }
+  updateAuthPassStatus();
+  updateHttpsSection();
+  modal.classList.add('open');
+}
+
+function closeSettingsModal() {
+  const modal = document.getElementById('settingsModal');
+  if (modal) modal.classList.remove('open');
+}
+
+document.getElementById('settingsCloseBtn').onclick = closeSettingsModal;
+document.getElementById('settingsOkBtn').onclick = closeSettingsModal;
+document.getElementById('saveAuthPassBtn').onclick = saveAuthPass;
+document.getElementById('saveCertNamesBtn').onclick = saveCertNames;
+document.getElementById('settingsPickDirBtn').onclick = () => openFolderPicker();
+document.getElementById('settingsDiagBtn').onclick = () => {
+  closeSettingsModal();
+  openDiagnosticsModal();
+};
+document.getElementById('settingsThemeSelect').addEventListener('change', async (e) => {
+  state.settings.theme = e.target.value;
+  applyTheme(e.target.value);
+  try {
+    await fetch('/api/settings', {
+      method: 'PUT',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ theme: e.target.value })
+    });
+  } catch {}
+});
+
 document.getElementById('menuBtn').onclick = (e) => {
   e.stopPropagation();
   toggleMenu();
@@ -3447,12 +3538,9 @@ document.getElementById('menuPopup').addEventListener('click', (e) => {
     case 'diagnostics':
       openDiagnosticsModal();
       break;
-    case 'save-cert-names':
-      saveCertNames();
-      return; // 保持菜单打开以便确认输入
-    case 'save-auth-pass':
-      saveAuthPass();
-      return;
+    case 'open-settings':
+      openSettingsModal();
+      break;
   }
   toggleMenu(false);
 });
