@@ -18,6 +18,11 @@
         "系统工具"
       ],
       "icon_url": "./ICON_256.PNG",
+      "preview_urls": [
+        "./assets/previews/1.jpg",
+        "./assets/previews/2.jpg",
+        "./assets/previews/3.jpg"
+      ],
       "readme_url": "./README.md",
       "bug_report_url": "https://github.com/huidegit2/Aurora-Browser/issues",
       "maintainer": "huidegit2",
