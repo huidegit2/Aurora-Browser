@@ -175,6 +175,22 @@
               "size": 44026111
             }
           }
+        },
+        "1.0.24": {
+          "changelog": "极光浏览器 Aurora v1.0.24\n\n- ci: publish FPK releases automatically from main (09facfe)\n- ci: retain FPK artifacts for build validation (832bf32)\n- fix: stabilize startup, tab lifecycle and downloads (#6) (a73e53e)\n- chore: update fnpack.json for v1.0.23 (2d5beb3)",
+          "updated_at": "2026-11-27T15:56:48+00:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.24/fn-browser-arm64.fpk",
+              "sha256": "4a4b0dd99d9319d9cf2bb1563465d5a2cc7425b3b7e7a6f553b82fcaa449a7b7",
+              "size": 43992797
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.24/fn-browser-x86_64.fpk",
+              "sha256": "05c807aead05efa5de7b73255c766396894aaa73f2ba1f9a52b4afac9e8cef84",
+              "size": 44035668
+            }
+          }
         }
       }
     }
