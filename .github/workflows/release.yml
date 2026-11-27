@@ -2,13 +2,18 @@ name: Build and Release FPK
 
 on:
   push:
+    branches:
+      - main
     tags:
       - "v*"
+    paths-ignore:
+      - "fnpack.json"
+      - "**/*.md"
   workflow_dispatch:
     inputs:
       version:
-        description: "版本号（例如 1.0.3）"
-        required: true
+        description: "版本号；留空自动递增（例如 1.0.24）"
+        required: false
         type: string
       dry_run:
         description: "只构建验证，不创建 Release"
@@ -50,17 +55,25 @@ jobs:
           node -e "const fs=require('fs'),h=fs.readFileSync('app/www/index.html','utf8');new Function(h.match(/<script>([\s\S]*)<\/script>/)[1])"
 
       - name: Regression tests
-        run: node --test tests/*.test.js
+        run: |
+          node --test tests/*.test.js
+          python3 -m unittest discover -s tests -p 'test_release_version.py' -v
 
       - name: Resolve version
         id: ver
+        env:
+          REQUESTED_VERSION: ${{ inputs.version }}
         run: |
-          if [ -n "${{ github.event.inputs.version }}" ]; then
-            VERSION="${{ github.event.inputs.version }}"
-          else
-            VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="$(python3 scripts/release_version.py)"
+          SOURCE_COMMIT="$(git rev-parse HEAD)"
+          if git show-ref --verify --quiet "refs/tags/v${VERSION}"; then
+            test "$(git rev-list -n 1 "v${VERSION}")" = "$SOURCE_COMMIT" || {
+              echo "Version v${VERSION} already belongs to another commit" >&2
+              exit 1
+            }
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "source_commit=$SOURCE_COMMIT" >> "$GITHUB_OUTPUT"
           echo "Building version $VERSION"
 
       - name: Build arm64 FPK
@@ -93,17 +106,35 @@ jobs:
         if: ${{ !inputs.dry_run }}
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
+          SOURCE_COMMIT: ${{ steps.ver.outputs.source_commit }}
         run: |
-          gh release create "v${{ steps.ver.outputs.version }}" \
-            --title "极光浏览器 Aurora v${{ steps.ver.outputs.version }}" \
-            --notes-file RELEASE_NOTES.md \
-            dist/fn-browser-arm64.fpk \
-            dist/fn-browser-x86_64.fpk
+          TAG="v${VERSION}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            git fetch --no-tags origin "refs/tags/${TAG}:refs/tags/${TAG}"
+            test "$(git rev-list -n 1 "$TAG")" = "$SOURCE_COMMIT" || {
+              echo "Refusing to replace assets for another source commit" >&2
+              exit 1
+            }
+            gh release upload "$TAG" dist/fn-browser-arm64.fpk dist/fn-browser-x86_64.fpk --clobber
+            gh release edit "$TAG" --draft=false --latest --notes-file RELEASE_NOTES.md
+          else
+            gh release create "$TAG" \
+              --target "$SOURCE_COMMIT" \
+              --title "极光浏览器 Aurora v${VERSION}" \
+              --notes-file RELEASE_NOTES.md \
+              --latest \
+              dist/fn-browser-arm64.fpk \
+              dist/fn-browser-x86_64.fpk
+          fi
 
       - name: Update FnDepot fnpack.json
         if: ${{ !inputs.dry_run }}
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: ${{ steps.ver.outputs.version }}
         run: |
-          VERSION="${{ steps.ver.outputs.version }}"
+          gh api "repos/${GITHUB_REPOSITORY}/contents/fnpack.json?ref=main" > .fnpack-base.json
           ARM_SHA="$(sha256sum dist/fn-browser-arm64.fpk | awk '{print $1}')"
           ARM_SIZE="$(stat -c '%s' dist/fn-browser-arm64.fpk)"
           X86_SHA="$(sha256sum dist/fn-browser-x86_64.fpk | awk '{print $1}')"
@@ -111,33 +142,38 @@ jobs:
           CHANGELOG_TEXT="$(cat RELEASE_NOTES.md)"
           NOW_ISO="$(date -Iseconds)"
           python3 - "$VERSION" "$ARM_SHA" "$ARM_SIZE" "$X86_SHA" "$X86_SIZE" "$NOW_ISO" "$CHANGELOG_TEXT" <<'PY'
-          import json, sys
+          import base64, json, os, sys
           ver, arm_sha, arm_size, x86_sha, x86_size, now_iso, changelog = sys.argv[1:8]
-          with open("fnpack.json", "r", encoding="utf-8") as f:
-              data = json.load(f)
-          app = data["apps"]["fn-browser"]
-          releases = app.setdefault("releases", {})
+          with open('.fnpack-base.json', encoding='utf-8') as f:
+              base = json.load(f)
+          data = json.loads(base64.b64decode(base['content']))
+          app = data['apps']['fn-browser']
+          releases = app.setdefault('releases', {})
+          repo = os.environ['GITHUB_REPOSITORY']
           releases[ver] = {
-              "changelog": changelog.strip() or f"极光浏览器 Aurora v{ver}",
-              "updated_at": now_iso,
-              "packages": {
-                  "arm": {
-                      "download_url": f"https://github.com/huidegit2/Aurora-Browser/releases/download/v{ver}/fn-browser-arm64.fpk",
-                      "sha256": arm_sha,
-                      "size": int(arm_size),
+              'changelog': changelog.strip() or f'极光浏览器 Aurora v{ver}',
+              'updated_at': now_iso,
+              'packages': {
+                  'arm': {
+                      'download_url': f'https://github.com/{repo}/releases/download/v{ver}/fn-browser-arm64.fpk',
+                      'sha256': arm_sha,
+                      'size': int(arm_size),
                   },
-                  "x86": {
-                      "download_url": f"https://github.com/huidegit2/Aurora-Browser/releases/download/v{ver}/fn-browser-x86_64.fpk",
-                      "sha256": x86_sha,
-                      "size": int(x86_size),
+                  'x86': {
+                      'download_url': f'https://github.com/{repo}/releases/download/v{ver}/fn-browser-x86_64.fpk',
+                      'sha256': x86_sha,
+                      'size': int(x86_size),
                   },
               },
           }
-          with open("fnpack.json", "w", encoding="utf-8") as f:
-              json.dump(data, f, ensure_ascii=False, indent=2)
-              f.write("\n")
+          content = json.dumps(data, ensure_ascii=False, indent=2) + '\n'
+          request = {
+              'message': f'chore: update fnpack.json for v{ver} [skip ci]',
+              'branch': 'main',
+              'sha': base['sha'],
+              'content': base64.b64encode(content.encode('utf-8')).decode('ascii'),
+          }
+          with open('.fnpack-update.json', 'w', encoding='utf-8') as f:
+              json.dump(request, f)
           PY
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add fnpack.json
-          git diff --cached --quiet || (git commit -m "chore: update fnpack.json for v${VERSION}" && git push origin HEAD:main)
+          gh api --method PUT "repos/${GITHUB_REPOSITORY}/contents/fnpack.json" --input .fnpack-update.json > /dev/null
