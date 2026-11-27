@@ -49,6 +49,9 @@ jobs:
           python3 -c "import json; d=json.load(open('fnpack.json',encoding='utf-8')); assert d['schema_version']=='2'"
           node -e "const fs=require('fs'),h=fs.readFileSync('app/www/index.html','utf8');new Function(h.match(/<script>([\s\S]*)<\/script>/)[1])"
 
+      - name: Regression tests
+        run: node --test tests/*.test.js
+
       - name: Resolve version
         id: ver
         run: |

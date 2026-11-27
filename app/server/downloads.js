@@ -27,20 +27,94 @@ function filenameFromDisposition(headerVal) {
     return '';
 }
 
-function uniqueFilePath(dir, filename) {
+function reserveDownloadFile(dir, filename) {
     const ext = path.extname(filename);
     const base = ext ? filename.slice(0, -ext.length) : filename;
-    let candidate = path.join(dir, filename);
-    let idx = 1;
-    while (fs.existsSync(candidate) || fs.existsSync(`${candidate}.part`)) {
-        candidate = path.join(dir, `${base} (${idx})${ext}`);
-        idx += 1;
+    for (let idx = 0; ; idx += 1) {
+        const candidate = path.join(dir, idx ? `${base} (${idx})${ext}` : filename);
+        if (fs.existsSync(candidate)) continue;
+        const tmpPath = `${candidate}.part`;
+        try {
+            // Reserve before creating the stream so concurrent downloads cannot share a part file.
+            const fd = fs.openSync(tmpPath, 'wx');
+            return { finalPath: candidate, tmpPath, fd };
+        } catch (err) {
+            if (err.code !== 'EEXIST') throw err;
+        }
     }
-    return candidate;
 }
 
-function createDownloadManager({ downloadsFile, defaultDownloadDir, readJson, writeJson, isDirWritable }) {
+function createDownloadManager({
+    downloadsFile,
+    defaultDownloadDir,
+    readJson,
+    writeJson,
+    isDirWritable,
+    connectTimeoutMs = 30_000,
+    stallTimeoutMs = 60_000
+}) {
+    for (const timeout of [connectTimeoutMs, stallTimeoutMs]) {
+        if (!Number.isFinite(timeout) || timeout <= 0 || timeout > 2_147_483_647) {
+            throw new Error('下载超时必须是有效的正毫秒数');
+        }
+    }
     const activeDownloads = new Map();
+    const terminalPatches = new Map();
+    let recordsErrorReported = false;
+    function readDownloadRecords(strict = false) {
+        const records = readJson(downloadsFile, []);
+        const valid = Array.isArray(records) && records.every((item) => (
+            item !== null && typeof item === 'object' && !Array.isArray(item)
+        ));
+        if (valid) {
+            recordsErrorReported = false;
+            return records.map((item) => {
+                const patch = terminalPatches.get(item.id);
+                return patch && item.status === 'downloading' && !activeDownloads.has(item.id)
+                    ? { ...item, ...patch }
+                    : item;
+            });
+        }
+        const err = new Error('下载记录文件格式异常，已保留原文件，请修复后重试');
+        err.code = 'DOWNLOADS_CORRUPT';
+        if (!recordsErrorReported) {
+            console.error(err.message, downloadsFile);
+            recordsErrorReported = true;
+        }
+        // Keep read APIs and service startup available, but never overwrite an invalid store.
+        if (strict) throw err;
+        return [];
+    }
+    function writeDownloadRecords(records) {
+        writeJson(downloadsFile, records);
+        // Every normal write includes pending terminal patches (or intentionally removes the record).
+        terminalPatches.clear();
+    }
+    const savedDownloads = readDownloadRecords();
+    let recovered = false;
+    const recoveredDownloads = savedDownloads.map((item) => {
+        if (item.status !== 'downloading') return item;
+        recovered = true;
+        if (item.filePath) {
+            try { fs.unlinkSync(`${item.filePath}.part`); } catch {}
+        }
+        const patch = {
+            status: 'failed',
+            speedBps: 0,
+            error: '下载因服务重启而中断',
+            finishedAt: new Date().toISOString()
+        };
+        terminalPatches.set(item.id, patch);
+        return { ...item, ...patch };
+    });
+    if (recovered) {
+        try {
+            writeDownloadRecords(recoveredDownloads);
+        } catch (err) {
+            // Keep terminal patches in memory; later normal writes can persist them.
+            console.error('保存启动下载恢复状态失败，暂用内存状态:', err.code || '', err.message);
+        }
+    }
 
     function getFnOsRoots() {
         const roots = [];
@@ -148,7 +222,7 @@ function createDownloadManager({ downloadsFile, defaultDownloadDir, readJson, wr
     }
 
     function getDownloadsList() {
-        const saved = readJson(downloadsFile, []);
+        const saved = readDownloadRecords();
         return saved.map((item) => {
             const active = activeDownloads.get(item.id);
             if (active) {
@@ -165,11 +239,11 @@ function createDownloadManager({ downloadsFile, defaultDownloadDir, readJson, wr
     }
 
     function updateDownloadRecord(id, patch) {
-        const list = readJson(downloadsFile, []);
+        const list = readDownloadRecords(true);
         const idx = list.findIndex((d) => d.id === id);
         if (idx === -1) return;
         list[idx] = { ...list[idx], ...patch };
-        writeJson(downloadsFile, list);
+        writeDownloadRecords(list);
     }
 
     function startNasDownload(rawUrl, preferredName, targetDir) {
@@ -182,6 +256,7 @@ function createDownloadManager({ downloadsFile, defaultDownloadDir, readJson, wr
         if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
             throw new Error('仅支持 http / https 下载地址');
         }
+        const list = readDownloadRecords(true);
 
         const dir = path.resolve(targetDir || defaultDownloadDir);
         fs.mkdirSync(dir, { recursive: true });
@@ -215,16 +290,15 @@ function createDownloadManager({ downloadsFile, defaultDownloadDir, readJson, wr
             createdAt: new Date().toISOString()
         };
 
-        const list = readJson(downloadsFile, []);
         list.unshift(record);
         if (list.length > 100) list.length = 100;
-        writeJson(downloadsFile, list);
+        writeDownloadRecords(list);
 
         const stateObj = {
-            req: null,
+            hop: null,
             stream: null,
             tmpPath: '',
-            cancelled: false,
+            terminal: false,
             receivedBytes: 0,
             totalBytes: 0,
             speedBps: 0,
@@ -233,54 +307,168 @@ function createDownloadManager({ downloadsFile, defaultDownloadDir, readJson, wr
         };
         activeDownloads.set(id, stateObj);
 
+        const stopHop = () => {
+            const hop = stateObj.hop;
+            stateObj.hop = null;
+            if (!hop) return;
+            clearTimeout(hop.connectTimer);
+            clearTimeout(hop.stallTimer);
+            if (hop.resp) {
+                hop.resp.unpipe();
+                hop.resp.destroy();
+            }
+            if (hop.req) hop.req.destroy();
+        };
+
+        // Claim the outcome before destroying anything: destroy() emits more error/close events.
+        const finish = (status, error = '') => {
+            if (stateObj.terminal) return;
+            stateObj.terminal = true;
+            stopHop();
+            const persist = () => {
+                if (stateObj.tmpPath) {
+                    try {
+                        fs.unlinkSync(stateObj.tmpPath);
+                    } catch (err) {
+                        if (err.code !== 'ENOENT') error = `${error}${error ? '; ' : ''}临时文件清理失败: ${err.message}`;
+                    }
+                    stateObj.tmpPath = '';
+                }
+                const patch = {
+                    status,
+                    error,
+                    receivedBytes: stateObj.receivedBytes,
+                    totalBytes: status === 'completed' ? stateObj.receivedBytes : stateObj.totalBytes,
+                    speedBps: 0,
+                    finishedAt: new Date().toISOString()
+                };
+                try {
+                    updateDownloadRecord(id, patch);
+                } catch (err) {
+                    terminalPatches.set(id, patch);
+                    console.error('保存下载状态失败，暂用内存状态:', err.code || '', err.message);
+                } finally {
+                    activeDownloads.delete(id);
+                }
+            };
+            const ws = stateObj.stream;
+            if (ws && !ws.closed) {
+                // Windows cannot unlink an open file; also wait for pending writes to release it.
+                ws.once('close', persist);
+                ws.destroy();
+            } else {
+                persist();
+            }
+        };
+        stateObj.finish = finish;
+
         const fetchUrl = (currentUrl, redirectsLeft) => {
-            if (stateObj.cancelled) return;
+            if (stateObj.terminal) return;
             let u;
             try {
                 u = new URL(currentUrl);
+                if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+                    return finish('failed', '仅支持 http / https 下载地址');
+                }
             } catch {
-                activeDownloads.delete(id);
-                return updateDownloadRecord(id, { status: 'failed', error: '重定向地址无效' });
+                return finish('failed', '重定向地址无效');
             }
-            const mod = u.protocol === 'https:' ? https : http;
-            const req = mod.get(
-                u,
-                {
-                    headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AuroraBrowser/1.0' },
-                    rejectUnauthorized: false
-                },
-                (resp) => {
-                    if ([301, 302, 303, 307, 308].includes(resp.statusCode) && resp.headers.location) {
-                        resp.resume();
-                        if (redirectsLeft <= 0) {
-                            activeDownloads.delete(id);
-                            return updateDownloadRecord(id, { status: 'failed', error: '重定向次数过多' });
-                        }
-                        return fetchUrl(new URL(resp.headers.location, u).href, redirectsLeft - 1);
-                    }
-                    if (resp.statusCode >= 400) {
-                        resp.resume();
-                        activeDownloads.delete(id);
-                        return updateDownloadRecord(id, { status: 'failed', error: `HTTP ${resp.statusCode}` });
-                    }
+            stopHop();
+            const hop = { req: null, resp: null, connectTimer: null, stallTimer: null };
+            stateObj.hop = hop;
+            const isCurrent = () => !stateObj.terminal && stateObj.hop === hop;
+            const fail = (err) => {
+                if (isCurrent()) finish('failed', err.message);
+            };
+            const resetStallTimer = () => {
+                clearTimeout(hop.stallTimer);
+                hop.stallTimer = setTimeout(() => {
+                    if (isCurrent()) finish('failed', '下载传输停滞超时');
+                }, stallTimeoutMs);
+            };
+            hop.connectTimer = setTimeout(() => {
+                if (isCurrent()) finish('failed', '下载连接或响应超时');
+            }, connectTimeoutMs);
 
-                    const dispName = filenameFromDisposition(resp.headers['content-disposition']);
-                    const finalName = dispName || fallbackName;
-                    const finalPath = uniqueFilePath(dir, finalName);
-                    const tmpPath = `${finalPath}.part`;
-                    stateObj.tmpPath = tmpPath;
-                    stateObj.totalBytes = parseInt(resp.headers['content-length'] || '0', 10) || 0;
-                    updateDownloadRecord(id, {
-                        filename: path.basename(finalPath),
-                        filePath: finalPath,
-                        totalBytes: stateObj.totalBytes
+            try {
+                const mod = u.protocol === 'https:' ? https : http;
+                const req = mod.get(u, {
+                    headers: { 'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AuroraBrowser/1.0' }
+                }, (resp) => {
+                    // Keep an error listener even on discarded hops so a late socket error is harmless.
+                    resp.on('error', fail);
+                    if (!isCurrent()) {
+                        resp.destroy();
+                        return;
+                    }
+                    hop.resp = resp;
+                    clearTimeout(hop.connectTimer);
+                    resp.on('aborted', () => fail(new Error('下载响应被中断')));
+                    resp.on('close', () => {
+                        if (!resp.complete) fail(new Error('下载响应提前关闭'));
                     });
 
-                    const ws = fs.createWriteStream(tmpPath);
-                    stateObj.stream = ws;
+                    if ([301, 302, 303, 307, 308].includes(resp.statusCode)) {
+                        if (!resp.headers.location) return finish('failed', '重定向缺少目标地址');
+                        if (redirectsLeft <= 0) return finish('failed', '重定向次数过多');
+                        let nextUrl;
+                        try {
+                            nextUrl = new URL(resp.headers.location, u).href;
+                        } catch {
+                            return finish('failed', '重定向地址无效');
+                        }
+                        return fetchUrl(nextUrl, redirectsLeft - 1);
+                    }
+                    if (resp.statusCode < 200 || resp.statusCode >= 300) {
+                        return finish('failed', `HTTP ${resp.statusCode}`);
+                    }
+                    if (resp.statusCode === 206 || resp.headers['content-range'] !== undefined) {
+                        return finish('failed', '未请求分段下载，拒绝部分响应 (206 / Content-Range)');
+                    }
 
+                    let expectedLength = null;
+                    const lengthHeader = resp.headers['content-length'];
+                    if (lengthHeader !== undefined) {
+                        expectedLength = Number(lengthHeader);
+                        if (!/^\d+$/.test(lengthHeader) || !Number.isSafeInteger(expectedLength)) {
+                            return finish('failed', '无效的 Content-Length');
+                        }
+                    }
+                    stateObj.totalBytes = expectedLength === null ? 0 : expectedLength;
+                    let ws;
+                    let finalPath;
+                    try {
+                        const finalName = filenameFromDisposition(resp.headers['content-disposition']) || fallbackName;
+                        const reserved = reserveDownloadFile(dir, finalName);
+                        finalPath = reserved.finalPath;
+                        stateObj.tmpPath = reserved.tmpPath;
+                        try {
+                            ws = fs.createWriteStream(reserved.tmpPath, { fd: reserved.fd });
+                        } catch (err) {
+                            fs.closeSync(reserved.fd);
+                            throw err;
+                        }
+                        stateObj.stream = ws;
+                        // Attach before persistence, which can fail and destroy the stream as well.
+                        ws.on('error', fail);
+                        updateDownloadRecord(id, {
+                            filename: path.basename(finalPath),
+                            filePath: finalPath,
+                            totalBytes: stateObj.totalBytes
+                        });
+                    } catch (err) {
+                        return finish('failed', err.message);
+                    }
+
+                    let responseEnded = false;
+                    let streamFinished = false;
                     resp.on('data', (chunk) => {
+                        if (!isCurrent()) return;
                         stateObj.receivedBytes += chunk.length;
+                        resetStallTimer();
+                        if (expectedLength !== null && stateObj.receivedBytes > expectedLength) {
+                            return finish('failed', '下载长度与 Content-Length 不符');
+                        }
                         const now = Date.now();
                         const dt = now - stateObj.lastTick;
                         if (dt >= 500) {
@@ -289,48 +477,36 @@ function createDownloadManager({ downloadsFile, defaultDownloadDir, readJson, wr
                             stateObj.lastTick = now;
                         }
                     });
-
-                    resp.pipe(ws);
-
-                    ws.on('finish', () => {
-                        activeDownloads.delete(id);
-                        if (stateObj.cancelled) {
-                            try { fs.unlinkSync(tmpPath); } catch {}
-                            return;
+                    resp.on('end', () => {
+                        if (!isCurrent()) return;
+                        responseEnded = true;
+                        if (!resp.complete || (expectedLength !== null && stateObj.receivedBytes !== expectedLength)) {
+                            finish('failed', '下载响应不完整或长度与 Content-Length 不符');
+                        }
+                    });
+                    ws.on('finish', () => { streamFinished = true; });
+                    ws.on('close', () => {
+                        if (!isCurrent()) return;
+                        if (!streamFinished || !responseEnded || !resp.complete) {
+                            return finish('failed', '下载文件提前关闭');
                         }
                         try {
-                            fs.renameSync(tmpPath, finalPath);
-                            updateDownloadRecord(id, {
-                                status: 'completed',
-                                receivedBytes: stateObj.receivedBytes,
-                                totalBytes: stateObj.totalBytes || stateObj.receivedBytes,
-                                speedBps: 0,
-                                finishedAt: new Date().toISOString()
-                            });
+                            if (fs.existsSync(finalPath)) throw new Error('目标文件已存在');
+                            fs.renameSync(stateObj.tmpPath, finalPath);
+                            stateObj.tmpPath = '';
+                            finish('completed');
                         } catch (err) {
-                            updateDownloadRecord(id, { status: 'failed', error: err.message });
+                            finish('failed', err.message);
                         }
                     });
-
-                    ws.on('error', (err) => {
-                        activeDownloads.delete(id);
-                        try { fs.unlinkSync(tmpPath); } catch {}
-                        if (!stateObj.cancelled) updateDownloadRecord(id, { status: 'failed', error: err.message });
-                    });
-
-                    resp.on('error', (err) => {
-                        activeDownloads.delete(id);
-                        try { ws.destroy(); } catch {}
-                        try { fs.unlinkSync(tmpPath); } catch {}
-                        if (!stateObj.cancelled) updateDownloadRecord(id, { status: 'failed', error: err.message });
-                    });
-                }
-            );
-            stateObj.req = req;
-            req.on('error', (err) => {
-                activeDownloads.delete(id);
-                if (!stateObj.cancelled) updateDownloadRecord(id, { status: 'failed', error: err.message });
-            });
+                    resetStallTimer();
+                    resp.pipe(ws);
+                });
+                hop.req = req;
+                req.on('error', fail);
+            } catch (err) {
+                fail(err);
+            }
         };
 
         fetchUrl(parsed.href, 5);
@@ -339,32 +515,26 @@ function createDownloadManager({ downloadsFile, defaultDownloadDir, readJson, wr
 
     function cancelDownload(id) {
         const active = activeDownloads.get(id);
-        if (active) {
-            active.cancelled = true;
-            try { if (active.req) active.req.destroy(); } catch {}
-            try { if (active.stream) active.stream.destroy(); } catch {}
-            try { if (active.tmpPath) fs.unlinkSync(active.tmpPath); } catch {}
-            activeDownloads.delete(id);
-        }
-        updateDownloadRecord(id, { status: 'cancelled', speedBps: 0 });
+        if (active) active.finish('cancelled');
     }
 
     function clearFinished() {
-        const remaining = readJson(downloadsFile, []).filter((d) => activeDownloads.has(d.id));
-        writeJson(downloadsFile, remaining);
+        const remaining = readDownloadRecords(true).filter((d) => activeDownloads.has(d.id));
+        writeDownloadRecords(remaining);
     }
 
     function deleteDownload(id, deleteFile) {
-        const list = readJson(downloadsFile, []);
+        cancelDownload(id);
+        const list = readDownloadRecords(true);
         const item = list.find((d) => d.id === id);
         if (item && deleteFile && item.filePath) {
             try { fs.unlinkSync(item.filePath); } catch {}
         }
-        writeJson(downloadsFile, list.filter((d) => d.id !== id));
+        writeDownloadRecords(list.filter((d) => d.id !== id));
     }
 
     function findDownload(id) {
-        return readJson(downloadsFile, []).find((d) => d.id === id);
+        return readDownloadRecords().find((d) => d.id === id);
     }
 
     return {
