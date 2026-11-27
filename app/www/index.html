@@ -1499,6 +1499,8 @@
   <div class="status-bar">
     <span class="engine-badge" id="engineBadge" title="当前代理内核状态">检测中...</span>
     <span class="status-text" id="statusText"></span>
+    <span id="startupNotice" role="status" style="max-width:50%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">正在验证访问权限…</span>
+    <button class="status-zoom" id="startupRetryBtn" type="button" hidden>重试</button>
     <button class="status-zoom" id="statusZoom" title="页面缩放，点击重置为 100%">100%</button>
   </div>
 
@@ -1672,42 +1674,76 @@
 
 <script>
 
-// Optional shared secret: supply it once via ?_aurora_token=..., strip it
-// from the address bar immediately, and exchange for an HttpOnly session cookie.
+// Optional shared secret: retain an in-memory fallback when storage is blocked,
+// strip it from the address bar, then exchange it during authentication.
+let auroraToken = '';
 (function cacheAuroraToken() {
   try {
     const url = new URL(location.href);
-    const fromUrl = url.searchParams.get('_aurora_token');
-    if (fromUrl) {
-      sessionStorage.setItem('auroraToken', fromUrl);
+    auroraToken = url.searchParams.get('_aurora_token') || '';
+    if (auroraToken) {
       url.searchParams.delete('_aurora_token');
       history.replaceState({}, document.title, url.pathname + url.search + url.hash);
     }
-    const token = sessionStorage.getItem('auroraToken');
-    if (token) {
-      fetch('/api/auth/session', {
-        method: 'POST',
-        headers: { 'X-Aurora-Token': token }
-      }).catch(() => {});
-    }
+  } catch (e) {}
+  try {
+    if (auroraToken) sessionStorage.setItem('auroraToken', auroraToken);
+    else auroraToken = sessionStorage.getItem('auroraToken') || '';
   } catch (e) {}
 })();
 
-function authHeaders(extra = {}) {
-  const token = sessionStorage.getItem('auroraToken');
-  return token ? { ...extra, 'X-Aurora-Token': token } : extra;
+function authHeaders(extra = {}, forAuthentication = false) {
+  if (!forAuthentication && !state.startup.authenticated) throw new Error('请先完成访问验证');
+  return auroraToken ? { ...extra, 'X-Aurora-Token': auroraToken } : extra;
 }
 
 function withToken(raw) {
-  const token = sessionStorage.getItem('auroraToken');
-  if (!token) return raw;
+  if (!auroraToken) return raw;
   try {
     const url = new URL(raw, location.href);
-    url.searchParams.set('_aurora_token', token);
+    url.searchParams.set('_aurora_token', auroraToken);
     return url.toString();
   } catch (e) {
     return raw;
   }
+}
+
+function withTimeout(promise, ms, message, onTimeout) {
+  let timer;
+  const timeout = new Promise((resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(message));
+      if (onTimeout) onTimeout();
+    }, ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+}
+
+// The deadline covers both headers and the response body (including stalled JSON).
+async function fetchJson(url, options = {}, timeoutMs = 6000) {
+  const abort = typeof AbortController === 'function' ? new AbortController() : null;
+  return withTimeout((async () => {
+    const resp = await fetch(url, { ...options, ...(abort ? { signal: abort.signal } : {}) });
+    if (!resp.ok) {
+      const error = new Error(`请求失败 (HTTP ${resp.status})`);
+      error.status = resp.status;
+      throw error;
+    }
+    return resp.json();
+  })(), timeoutMs, '请求超时，请重试', () => { if (abort) abort.abort(); });
+}
+
+function setStartupIssue(key, message) {
+  if (message) state.startup.issues[key] = message;
+  else delete state.startup.issues[key];
+  const messages = Object.values(state.startup.issues);
+  const notice = document.getElementById('startupNotice');
+  if (notice) {
+    notice.textContent = messages.join('；') || (state.startup.authenticated ? '' : '正在验证访问权限…');
+    notice.title = notice.textContent;
+  }
+  const retry = document.getElementById('startupRetryBtn');
+  if (retry) retry.hidden = messages.length === 0;
 }
 
 const SEARCH_ENGINES = {
@@ -1725,7 +1761,8 @@ const state = {
   settings: { searchEngine: 'bing', theme: 'system' },
   engineMode: 'lite',
   ui: { showBookmarksBar: true, sidebarOpen: false, sidebarPanel: 'history' },
-  sj: { ready: false, controller: null, bootPromise: null },
+  sj: { ready: false, controller: null, bootPromise: null, attempt: 0, keepaliveTimer: null },
+  startup: { authenticated: false, issues: {}, promise: null },
   https: { enabled: false, port: 18921, mode: 'ca' }
 };
 
@@ -1807,7 +1844,7 @@ function isIntranetUrl(targetUrl) {
 function canUseScramjet(targetUrl) {
   if (!state.sj.ready || !state.sj.controller) return false;
   // http:// 内网设备（如 192.168.1.1 路由器/爱快）走 Scramjet 满血内核以支持 JS/Cookie；
-  // https:// 自签证书内网设备（如 PVE）继续走轻量直连跳过证书校验
+  // https:// 内网设备继续走轻量直连；自签名目标需配置信任，不再跳过证书校验
   return !isIntranetUrl(targetUrl) || /^http:\/\//i.test(targetUrl);
 }
 
@@ -1830,55 +1867,76 @@ function updateEngineBadge() {
   updateMenuEngineInfo();
 }
 
+const scriptLoads = new Map();
 function loadScriptTag(src) {
-  return new Promise((resolve, reject) => {
-    const s = document.createElement('script');
-    s.src = src;
-    s.onload = resolve;
-    s.onerror = () => reject(new Error('脚本加载失败: ' + src));
-    document.head.appendChild(s);
+  if (scriptLoads.has(src)) return scriptLoads.get(src);
+  const script = document.createElement('script');
+  script.src = src;
+  const loaded = withTimeout(new Promise((resolve, reject) => {
+    script.onload = resolve;
+    script.onerror = () => reject(new Error('脚本加载失败: ' + src));
+    document.head.appendChild(script);
+  }), 4000, '脚本加载超时: ' + src).catch((err) => {
+    script.remove();
+    scriptLoads.delete(src);
+    throw err;
+  }).finally(() => {
+    script.onload = null;
+    script.onerror = null;
   });
+  scriptLoads.set(src, loaded);
+  return loaded;
 }
 
-// 启动 Scramjet 内核：注册服务工作线程 → 加载内核脚本 → 建立 Epoxy/Wisp 传输 → 创建 Controller
-// 任何一步失败都只记录日志并保持 lite 回退，绝不阻断浏览器外壳本身。
+function loadEpoxyModule() {
+  return import('/epoxy/index.mjs');
+}
+
+// 启动 Scramjet 内核：每一步及整个启动都有期限，失败后可再次点击角标/重试。
+// 超时的旧启动即使迟到也不能发布 Controller，始终保留 lite 回退。
 async function bootScramjet() {
+  if (!state.startup.authenticated) return false;
+  if (state.sj.ready) return true;
   if (state.sj.bootPromise) return state.sj.bootPromise;
-  state.sj.bootPromise = (async () => {
+  const attempt = ++state.sj.attempt;
+  let pendingController = null;
+  const wait = async (promise, name) => {
+    const result = await withTimeout(promise, 4000, name + '超时');
+    if (state.sj.attempt !== attempt) throw new Error('内核启动已取消');
+    return result;
+  };
+  const bootPromise = withTimeout((async () => {
     if (!('serviceWorker' in navigator)) {
       throw new Error('当前浏览器不支持 Service Worker');
     }
-    const registration = await navigator.serviceWorker.register('/sw.js', {
+    const registration = await wait(navigator.serviceWorker.register('/sw.js', {
       scope: '/',
       updateViaCache: 'none'
-    });
-    await navigator.serviceWorker.ready;
+    }), 'Service Worker 注册');
+    await wait(navigator.serviceWorker.ready, 'Service Worker 激活');
     if (!navigator.serviceWorker.controller) {
-      await new Promise((resolve) => {
-        const t = setTimeout(resolve, 4000);
-        navigator.serviceWorker.addEventListener(
-          'controllerchange',
-          () => {
-            clearTimeout(t);
-            resolve();
-          },
-          { once: true }
-        );
-      });
+      let listener;
+      let timer;
+      await wait(new Promise((resolve) => {
+        listener = resolve;
+        timer = setTimeout(resolve, 3500);
+        navigator.serviceWorker.addEventListener('controllerchange', listener);
+      }).finally(() => {
+        clearTimeout(timer);
+        navigator.serviceWorker.removeEventListener('controllerchange', listener);
+      }), 'Service Worker 控制权');
     }
     const serviceworker = navigator.serviceWorker.controller || registration.active;
     if (!serviceworker) throw new Error('Service Worker 未能激活');
 
-    await loadScriptTag('/scramjet/scramjet.js');
-    await loadScriptTag('/controller/controller.api.js');
-    await loadScriptTag('/utils/scramjet-utils.js');
+    await wait(loadScriptTag('/scramjet/scramjet.js'), 'Scramjet 脚本');
+    await wait(loadScriptTag('/controller/controller.api.js'), 'Controller 脚本');
+    await wait(loadScriptTag('/utils/scramjet-utils.js'), '内核工具脚本');
 
-    const { default: EpoxyTransport } = await import('/epoxy/index.mjs');
+    const { default: EpoxyTransport } = await wait(loadEpoxyModule(), 'Epoxy 模块');
     const scheme = location.protocol === 'https:' ? 'wss:' : 'ws:';
-    const wispUrl = withToken(`${scheme}//${location.host}/wisp/`);
-    const transport = new EpoxyTransport({ wisp: wispUrl });
-
-    const controller = new $scramjetController.Controller({
+    const transport = new EpoxyTransport({ wisp: withToken(`${scheme}//${location.host}/wisp/`) });
+    pendingController = new $scramjetController.Controller({
       serviceworker,
       transport,
       config: {
@@ -1887,33 +1945,44 @@ async function bootScramjet() {
         injectPath: '/controller/controller.inject.js'
       }
     });
-    await controller.wait();
-
-    state.sj.controller = controller;
+    await wait(pendingController.wait(), 'Controller 就绪');
+    state.sj.controller = pendingController;
     state.sj.ready = true;
 
-    // 周期性唤醒服务工作线程，避免其被浏览器回收后首个导航丢失路由
-    setInterval(() => {
-      if (navigator.serviceWorker.controller) {
-        navigator.serviceWorker.controller.postMessage('keepalive');
-      }
-    }, 15000);
-
+    // 重试不会重复注册保活定时器。
+    if (!state.sj.keepaliveTimer) {
+      state.sj.keepaliveTimer = setInterval(() => {
+        if (navigator.serviceWorker.controller) {
+          navigator.serviceWorker.controller.postMessage('keepalive');
+        }
+      }, 15000);
+    }
+    setStartupIssue('kernel', '');
     updateEngineBadge();
     console.log('[fn-browser] Scramjet 内核已就绪');
-  })().catch((err) => {
-    state.sj.ready = false;
-    state.sj.controller = null;
-    updateEngineBadge();
-    console.warn('[fn-browser] Scramjet 启动失败，外网页面回退轻量直连内核:', err);
+    return true;
+  })(), 12000, 'Scramjet 启动超时').catch((err) => {
+    if (state.sj.attempt === attempt) {
+      state.sj.attempt += 1;
+      state.sj.ready = false;
+      state.sj.controller = null;
+      try { if (pendingController && pendingController.destroy) pendingController.destroy(); } catch {}
+      setStartupIssue('kernel', 'Scramjet 未就绪，已回退轻量内核，可重试');
+      updateEngineBadge();
+      console.warn('[fn-browser] Scramjet 启动失败，外网页面回退轻量直连内核:', err);
+    }
+    return false;
+  }).finally(() => {
+    if (state.sj.bootPromise === bootPromise) state.sj.bootPromise = null;
   });
-  return state.sj.bootPromise;
+  state.sj.bootPromise = bootPromise;
+  return bootPromise;
 }
 
 // Scramjet 帧内发生导航（点击链接、重定向等）时同步地址栏与标签状态
 function onScramjetUrlChange(tabId, url) {
   const tab = state.tabs.find((t) => t.id === tabId);
-  if (!tab || !url || !/^https?:\/\//i.test(url)) return;
+  if (!state.startup.authenticated || !tab || tab.pendingNavigation || tab.kernel !== 'scramjet' || !url || !/^https?:\/\//i.test(url)) return;
   const isProgrammatic = tab.sjExpectUrl === url;
   tab.sjExpectUrl = null;
   if (tab.url === url) return;
@@ -1940,28 +2009,100 @@ function onScramjetUrlChange(tabId, url) {
   }
 }
 
-// 通过 Scramjet 帧导航（每个标签页复用同一个帧元素与 Frame 对象）
-function navigateWithScramjet(tab, pane, targetUrl) {
-  tab.kernel = 'scramjet';
-  if (!tab.sjFrame) {
-    pane.innerHTML = `<iframe class="proxy-frame" id="frame-${tab.id}"></iframe>`;
-    const frameEl = document.getElementById(`frame-${tab.id}`);
-    const plugins = [];
-    try {
-      plugins.push(new $scramjetUtils.UrlWatcherPlugin((url) => onScramjetUrlChange(tab.id, url)));
-    } catch (e) {
-      console.warn('[fn-browser] UrlWatcherPlugin 初始化失败:', e);
-    }
-    tab.sjFrame = state.sj.controller.createFrame(frameEl, { plugins });
-    frameEl.addEventListener('load', () => {
-      showLoading(false);
-      installFramePopupGuards(frameEl);
-    });
-    applyZoom(tab);
+function isCurrentNavigation(tab, pane, sequence) {
+  return state.tabs.includes(tab) && tab.navigationSeq === sequence &&
+    document.getElementById(`pane-${tab.id}`) === pane;
+}
+
+function clearTabFrameWatch(tab) {
+  if (tab.frameCleanup) tab.frameCleanup();
+  tab.frameCleanup = null;
+  clearTimeout(tab.loadTimer);
+  tab.loadTimer = null;
+}
+
+function disposeTabFrame(tab, pane) {
+  clearTabFrameWatch(tab);
+  const sjFrame = tab.sjFrame;
+  const frames = sjFrame && sjFrame.controller && sjFrame.controller.frames;
+  tab.sjFrame = null;
+  tab.sjExpectUrl = null;
+  try { if (sjFrame && typeof sjFrame.destroy === 'function') sjFrame.destroy(); } catch {}
+  // Controller 0.1.0 has no Frame.destroy(); release its public registry entry.
+  // Use the owning controller even if the active controller has been replaced.
+  if (Array.isArray(frames)) {
+    const index = frames.indexOf(sjFrame);
+    if (index !== -1) frames.splice(index, 1);
   }
+  // UrlWatcher retains only this frame/client/window; DOM teardown releases that cycle.
+  const frame = pane && pane.querySelector('.proxy-frame');
+  if (frame) {
+    try { frame.src = 'about:blank'; } catch {}
+    frame.remove();
+  }
+}
+
+// Loading callbacks and deadlines belong to one navigation of one live tab.
+function watchTabFrame(tab, pane, frame, sequence) {
+  clearTabFrameWatch(tab);
+  const current = () => isCurrentNavigation(tab, pane, sequence) && pane.querySelector('.proxy-frame') === frame;
+  const finish = (message = '') => {
+    if (!current()) return;
+    clearTimeout(tab.loadTimer);
+    tab.loadTimer = null;
+    tab.loadError = message;
+    showLoading(false, tab.id, sequence);
+  };
+  const onLoad = () => {
+    if (!current()) return;
+    finish();
+    installFramePopupGuards(frame);
+    if (tab.kernel === 'lite') {
+      try {
+        const title = frame.contentDocument && frame.contentDocument.title;
+        if (title) {
+          tab.title = title;
+          renderTabStrip();
+        }
+      } catch {}
+    }
+  };
+  const onError = () => finish('页面加载失败，请点击刷新重试');
+  frame.addEventListener('load', onLoad);
+  frame.addEventListener('error', onError);
+  tab.loadTimer = setTimeout(() => finish('页面加载超时，可点击刷新重试'), 15000);
+  tab.frameCleanup = () => {
+    frame.removeEventListener('load', onLoad);
+    frame.removeEventListener('error', onError);
+  };
+}
+
+// 每次显式导航创建新帧，避免旧导航的 watcher 事件被当作当前页内导航。
+function navigateWithScramjet(tab, pane, targetUrl, sequence = tab.navigationSeq) {
+  if (!isCurrentNavigation(tab, pane, sequence)) return false;
+  disposeTabFrame(tab, pane);
+  tab.kernel = 'scramjet';
+  pane.innerHTML = `<iframe class="proxy-frame" id="frame-${tab.id}"></iframe>`;
+  const frameEl = document.getElementById(`frame-${tab.id}`);
+  const plugins = [];
+  let sjFrame;
+  try {
+    plugins.push(new $scramjetUtils.UrlWatcherPlugin((url) => {
+      if (isCurrentNavigation(tab, pane, sequence) && tab.sjFrame === sjFrame && pane.querySelector('.proxy-frame') === frameEl) {
+        onScramjetUrlChange(tab.id, url);
+      }
+    }));
+  } catch (e) {
+    console.warn('[fn-browser] UrlWatcherPlugin 初始化失败:', e);
+  }
+  sjFrame = state.sj.controller.createFrame(frameEl, { plugins });
+  tab.sjFrame = sjFrame;
+  applyZoom(tab);
+  watchTabFrame(tab, pane, frameEl, sequence);
+  tab.pendingNavigation = false;
   tab.sjExpectUrl = targetUrl;
-  tab.sjFrame.go(targetUrl);
-  setTimeout(() => showLoading(false), 1500);
+  sjFrame.go(targetUrl);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2077,24 +2218,16 @@ function installFramePopupGuards(frame) {
 }
 
 // 通过内置轻量直连代理导航（内网设备与双内核都不可用时的回退路径）
-async function navigateWithLite(tab, pane, targetUrl) {
-  tab.sjFrame = null;
-  tab.kernel = 'lite';
+async function navigateWithLite(tab, pane, targetUrl, sequence = tab.navigationSeq) {
   const proxySrc = await buildProxySrc(targetUrl);
-  pane.innerHTML = `<iframe class="proxy-frame" id="frame-${tab.id}" name="aurora-${tab.id}" src="${proxySrc}"></iframe>`;
+  if (!isCurrentNavigation(tab, pane, sequence)) return false;
+  disposeTabFrame(tab, pane);
+  tab.kernel = 'lite';
+  tab.pendingNavigation = false;
+  pane.innerHTML = `<iframe class="proxy-frame" id="frame-${tab.id}" name="aurora-${tab.id}" src="${proxySrc}" sandbox="allow-scripts allow-forms allow-downloads" referrerpolicy="no-referrer"></iframe>`;
   applyZoom(tab);
-  const frame = document.getElementById(`frame-${tab.id}`);
-  frame.addEventListener('load', () => {
-    showLoading(false);
-    installFramePopupGuards(frame);
-    try {
-      const frameTitle = frame.contentDocument && frame.contentDocument.title;
-      if (frameTitle) {
-        tab.title = frameTitle;
-        renderTabStrip();
-      }
-    } catch {}
-  });
+  watchTabFrame(tab, pane, document.getElementById(`frame-${tab.id}`), sequence);
+  return true;
 }
 
 // 主题应用
@@ -2166,6 +2299,7 @@ function syncZoomIndicators() {
 
 // 标签页管理
 function createTab(initialUrl = 'fn://newtab') {
+  if (!state.startup.authenticated) return null;
   const id = 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
   const tab = {
     id,
@@ -2174,7 +2308,10 @@ function createTab(initialUrl = 'fn://newtab') {
     history: [initialUrl],
     historyIndex: 0,
     zoom: 1,
-    kernel: null
+    kernel: null,
+    navigationSeq: 0,
+    loading: false,
+    loadError: ''
   };
   state.tabs.push(tab);
 
@@ -2206,8 +2343,10 @@ function closeTab(id, e) {
     closedTabUrls.push(closing.url);
     if (closedTabUrls.length > 20) closedTabUrls.shift();
   }
-  state.tabs.splice(idx, 1);
+  closing.navigationSeq = (closing.navigationSeq || 0) + 1;
   const pane = document.getElementById(`pane-${id}`);
+  disposeTabFrame(closing, pane);
+  state.tabs.splice(idx, 1);
   if (pane) pane.remove();
 
   if (state.tabs.length === 0) {
@@ -2241,9 +2380,15 @@ function getActiveTab() {
 }
 
 async function navigateTab(id, rawInput, skipHistoryPush = false) {
+  if (!state.startup.authenticated) return;
   const tab = state.tabs.find((t) => t.id === id);
-  if (!tab) return;
-
+  const pane = document.getElementById(`pane-${id}`);
+  if (!tab || !pane) return;
+  const sequence = (tab.navigationSeq || 0) + 1;
+  tab.navigationSeq = sequence;
+  tab.pendingNavigation = true;
+  tab.loadError = '';
+  clearTabFrameWatch(tab);
   const targetUrl = resolveUserInput(rawInput);
   tab.url = targetUrl;
 
@@ -2253,16 +2398,16 @@ async function navigateTab(id, rawInput, skipHistoryPush = false) {
     tab.historyIndex = tab.history.length - 1;
   }
 
-  const pane = document.getElementById(`pane-${id}`);
-  if (!pane) return;
-
   if (targetUrl === 'fn://newtab') {
+    disposeTabFrame(tab, pane);
     tab.title = '新标签页';
     tab.kernel = null;
+    tab.pendingNavigation = false;
+    showLoading(false, id, sequence);
     renderNewTabPage(pane, id);
     applyZoom(tab);
     renderTabStrip();
-    syncToolbarWithActiveTab();
+    if (id === state.activeTabId) syncToolbarWithActiveTab();
     updateEngineBadge();
     return;
   }
@@ -2272,61 +2417,67 @@ async function navigateTab(id, rawInput, skipHistoryPush = false) {
   } catch {
     tab.title = targetUrl;
   }
-
   renderTabStrip();
-  syncToolbarWithActiveTab();
-  showLoading(true);
+  if (id === state.activeTabId) syncToolbarWithActiveTab();
+  showLoading(true, id, sequence);
 
-  if (window.isSecureContext && state.engineMode === 'scramjet' && !state.sj.ready) {
-    await Promise.race([
-      bootScramjet(),
-      new Promise((r) => setTimeout(r, 4500))
-    ]);
+  try {
+    if (window.isSecureContext && state.engineMode === 'scramjet' && !state.sj.ready) {
+      await withTimeout(bootScramjet(), 4500, '内核仍在启动').catch(() => {});
+    }
+    if (!isCurrentNavigation(tab, pane, sequence)) return;
+    if (canUseScramjet(targetUrl)) {
+      try {
+        navigateWithScramjet(tab, pane, targetUrl, sequence);
+      } catch (err) {
+        // Controller/Frame 导航失败也保留原有轻量回退。
+        console.warn('[fn-browser] Scramjet 导航失败，回退轻量内核:', err);
+        await navigateWithLite(tab, pane, targetUrl, sequence);
+      }
+    } else {
+      await navigateWithLite(tab, pane, targetUrl, sequence);
+    }
+    if (!isCurrentNavigation(tab, pane, sequence)) return;
+    tab.pendingNavigation = false;
+    updateEngineBadge();
+    if (id === state.activeTabId) syncToolbarWithActiveTab();
+    fetch('/api/history', {
+      method: 'POST',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ title: tab.title, url: targetUrl })
+    }).catch(() => {});
+  } catch (err) {
+    if (!isCurrentNavigation(tab, pane, sequence)) return;
+    tab.pendingNavigation = false;
+    tab.loadError = '页面加载失败，请点击刷新重试';
+    showLoading(false, id, sequence);
+    console.warn('[fn-browser] 导航失败:', err);
   }
-
-  if (canUseScramjet(targetUrl)) {
-    // 外网页面走 Scramjet 内核（安全上下文且内核已就绪）
-    navigateWithScramjet(tab, pane, targetUrl);
-  } else {
-    // 内网设备 / Scramjet 不可用：走内置轻量直连代理
-    await navigateWithLite(tab, pane, targetUrl);
-  }
-  updateEngineBadge();
-
-  // 记录历史
-  fetch('/api/history', {
-    method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ title: tab.title, url: targetUrl })
-  }).catch(() => {});
 }
 
-function showLoading(active) {
+function syncLoadingIndicator() {
+  const tab = getActiveTab();
   const bar = document.getElementById('loadingBar');
   const statusText = document.getElementById('statusText');
-  const tab = getActiveTab();
-  if (tab) {
-    const nextLoading = Boolean(active) && tab.url !== 'fn://newtab';
-    if (tab.loading !== nextLoading) {
-      tab.loading = nextLoading;
-      renderTabStrip();
-    }
+  if (bar) {
+    bar.style.width = '';
+    bar.classList.toggle('active', Boolean(tab && tab.loading));
   }
-  if (active) {
-    bar.classList.add('active');
-    if (statusText && tab && tab.url !== 'fn://newtab') {
-      statusText.textContent = `正在加载 ${tab.url} …`;
-    }
-  } else {
-    bar.style.width = '100%';
-    setTimeout(() => {
-      bar.classList.remove('active');
-      bar.style.width = '0%';
-    }, 220);
-    if (statusText && tab) {
-      statusText.textContent = tab.url === 'fn://newtab' ? '' : tab.url;
-    }
+  if (statusText && tab) {
+    statusText.textContent = tab.loadError || (tab.loading ? `正在加载 ${tab.url} …` :
+      (tab.url === 'fn://newtab' ? '' : tab.url));
   }
+}
+
+function showLoading(active, tabId = state.activeTabId, sequence) {
+  const tab = state.tabs.find((t) => t.id === tabId);
+  if (!tab || (sequence !== undefined && tab.navigationSeq !== sequence)) return;
+  const nextLoading = Boolean(active) && tab.url !== 'fn://newtab';
+  if (tab.loading !== nextLoading) {
+    tab.loading = nextLoading;
+    renderTabStrip();
+  }
+  if (tabId === state.activeTabId) syncLoadingIndicator();
 }
 
 // 标签页图标：加载中显示旋转圆环，否则显示站点 favicon，失败回退彩色字母块
@@ -2475,10 +2626,7 @@ function syncToolbarWithActiveTab() {
       : '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="9"/><path d="M12 16v-4"/><circle cx="12" cy="8" r="0.5" fill="currentColor"/></svg>';
   }
 
-  const statusText = document.getElementById('statusText');
-  if (statusText && !document.getElementById('loadingBar').classList.contains('active')) {
-    statusText.textContent = tab.url === 'fn://newtab' ? '' : tab.url;
-  }
+  syncLoadingIndicator();
 }
 
 function renderBookmarkBar() {
@@ -2636,20 +2784,29 @@ function escapeHtml(str) {
 // 书签与历史交互
 // ---------------------------------------------------------------------------
 async function loadBookmarks() {
-  const resp = await fetch('/api/bookmarks', { headers: authHeaders() });
-  state.bookmarks = await resp.json();
+  if (!state.startup.authenticated) return;
+  const bookmarks = await fetchJson('/api/bookmarks', { headers: authHeaders() });
+  if (!Array.isArray(bookmarks) || !bookmarks.every((b) => b && typeof b.url === 'string' && typeof b.title === 'string')) {
+    throw new Error('书签数据无效');
+  }
+  state.bookmarks = bookmarks;
   renderBookmarkBar();
   syncToolbarWithActiveTab();
+  refreshNewTabPages();
   if (state.ui.sidebarOpen && state.ui.sidebarPanel === 'bookmarks') {
     renderSidebarPanel();
   }
 }
 
-async function refreshHistoryCache() {
+async function refreshHistoryCache(reportFailure = false) {
+  if (!state.startup.authenticated) return state.historyCache;
   try {
-    const resp = await fetch('/api/history', { headers: authHeaders() });
-    state.historyCache = await resp.json();
-  } catch {}
+    const history = await fetchJson('/api/history', { headers: authHeaders() });
+    if (!Array.isArray(history)) throw new Error('历史记录无效');
+    state.historyCache = history;
+  } catch (err) {
+    if (reportFailure) throw err;
+  }
   return state.historyCache;
 }
 
@@ -3843,8 +4000,7 @@ async function toggleTheme() {
 document.getElementById('themeBtn').onclick = () => toggleTheme();
 
 document.getElementById('engineBadge').onclick = () => {
-  const tab = getActiveTab();
-  if (tab && tab.url !== 'fn://newtab' && !state.sj.ready && state.engineMode === 'scramjet') {
+  if (!state.sj.ready && state.engineMode === 'scramjet' && window.isSecureContext) {
     bootScramjet();
   }
 };
@@ -3868,25 +4024,33 @@ document.getElementById('viewportContainer').addEventListener(
   { passive: false }
 );
 
-// 监听 iframe 内部发送的导航同步事件
-window.addEventListener('message', (event) => {
-  if (!event.data || event.data.type !== 'fn-browser-nav') return;
-  const tab = (event.data.tabId && state.tabs.find((t) => t.id === event.data.tabId)) || getActiveTab();
-  if (!tab) return;
+// Only the live iframe owning this WindowProxy may update its tab. Sandboxed
+// lite pages have an opaque origin; a stale/forged tabId never selects another tab.
+function onFrameNavigationMessage(event) {
+  if (!state.startup.authenticated || !event.data || event.data.type !== 'fn-browser-nav') return;
+  if (event.origin !== location.origin && event.origin !== 'null') return;
+  const tab = state.tabs.find((candidate) => {
+    const frame = document.getElementById(`frame-${candidate.id}`);
+    return frame && frame.contentWindow === event.source;
+  });
+  if (!tab || tab.pendingNavigation || tab.url === 'fn://newtab') return;
+  if (event.data.tabId && event.data.tabId !== tab.id) return;
   let urlChanged = false;
-  if (event.data.url && /^https?:\/\//i.test(event.data.url) && event.data.url !== tab.url) {
+  if (typeof event.data.url === 'string' && /^https?:\/\//i.test(event.data.url) && event.data.url !== tab.url) {
     tab.url = event.data.url;
     tab.history = tab.history.slice(0, tab.historyIndex + 1);
     tab.history.push(tab.url);
     tab.historyIndex = tab.history.length - 1;
     urlChanged = true;
   }
-  if (event.data.title) tab.title = event.data.title;
-  if (urlChanged || event.data.title) {
+  const title = typeof event.data.title === 'string' ? event.data.title : '';
+  if (title) tab.title = title;
+  if (urlChanged || title) {
     renderTabStrip();
-    syncToolbarWithActiveTab();
+    if (tab.id === state.activeTabId) syncToolbarWithActiveTab();
   }
-});
+}
+window.addEventListener('message', onFrameNavigationMessage);
 
 // 快捷键支持
 window.addEventListener('keydown', (e) => {
@@ -4125,109 +4289,164 @@ async function saveAuthPass() {
 }
 
 async function ensureAuthenticated() {
+  state.startup.authenticated = false;
+  const modal = document.getElementById('authLockModal');
   try {
-    const resp = await fetch('/api/auth/status', { cache: 'no-store' });
-    if (!resp.ok) return true;
-    const info = await resp.json();
-    if (!info.authRequired || info.authenticated) return true;
-
-    const modal = document.getElementById('authLockModal');
-    const input = document.getElementById('authLockInput');
-    const errEl = document.getElementById('authLockErr');
-    const submitBtn = document.getElementById('authLockSubmitBtn');
-    modal.classList.add('open');
-    setTimeout(() => input.focus(), 50);
-
-    await new Promise((resolve) => {
-      const submit = async () => {
-        const pwd = input.value;
-        if (!pwd) {
-          errEl.textContent = '请输入访问密码';
-          return;
-        }
-        submitBtn.disabled = true;
-        errEl.textContent = '';
-        try {
-          const r = await fetch('/api/auth/session', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ password: pwd })
-          });
-          if (r.ok) {
-            modal.classList.remove('open');
-            resolve();
-            return;
-          }
-          const d = await r.json().catch(() => ({}));
-          errEl.textContent = d.error || '访问密码错误';
-        } catch {
-          errEl.textContent = '网络异常，请重试';
-        } finally {
-          submitBtn.disabled = false;
-        }
-      };
-      submitBtn.onclick = submit;
-      input.onkeydown = (e) => {
-        if (e.key === 'Enter') submit();
-      };
-    });
-    return true;
-  } catch {
-    return true;
+    const info = await fetchJson('/api/auth/status', { cache: 'no-store', headers: authHeaders({}, true) });
+    if (!info || typeof info.authRequired !== 'boolean' || typeof info.authenticated !== 'boolean') {
+      throw new Error('认证状态无效');
+    }
+    if (!info.authRequired || info.authenticated) {
+      if (auroraToken && info.authRequired) {
+        const result = await fetchJson('/api/auth/session', { method: 'POST', headers: authHeaders({}, true) });
+        if (!result || result.ok !== true) throw new Error('认证响应无效');
+      }
+      modal.classList.remove('open');
+      return true;
+    }
+  } catch (err) {
+    setStartupIssue('auth', '无法验证访问权限：' + err.message);
+    return false;
   }
+
+  const input = document.getElementById('authLockInput');
+  const errEl = document.getElementById('authLockErr');
+  const submitBtn = document.getElementById('authLockSubmitBtn');
+  setStartupIssue('auth', '');
+  modal.classList.add('open');
+  setTimeout(() => input.focus(), 50);
+  await new Promise((resolve) => {
+    const submit = async () => {
+      if (submitBtn.disabled) return;
+      const pwd = input.value;
+      if (!pwd) {
+        errEl.textContent = '请输入访问密码';
+        return;
+      }
+      submitBtn.disabled = true;
+      errEl.textContent = '';
+      try {
+        const result = await fetchJson('/api/auth/session', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ password: pwd })
+        });
+        if (!result || result.ok !== true) throw new Error('认证响应无效，请重试');
+        auroraToken = '';
+        try { sessionStorage.removeItem('auroraToken'); } catch {}
+        input.value = '';
+        input.onkeydown = null;
+        submitBtn.onclick = null;
+        modal.classList.remove('open');
+        resolve();
+      } catch (err) {
+        errEl.textContent = err.status === 401 ? '访问密码错误' : err.message;
+      } finally {
+        submitBtn.disabled = false;
+      }
+    };
+    submitBtn.onclick = submit;
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') submit();
+    };
+  });
+  return true;
 }
 
-// 启动初始化
-(async function init() {
-  await ensureAuthenticated();
-  try {
-    const [statusResp, settingsResp] = await Promise.all([
-      fetch('/api/status', { headers: authHeaders() }),
-      fetch('/api/settings', { headers: authHeaders() })
-    ]);
-    const status = await statusResp.json();
-    state.engineMode = status.engine || 'lite';
-    if (status.https) {
-      state.https = {
-        enabled: !!status.https.enabled,
-        port: status.https.port || 18921,
-        mode: status.https.mode || 'ca'
-      };
-    }
-    const badge = document.getElementById('engineBadge');
-    badge.title = `内存占用: ${status.memoryMB} MB`;
-    updateEngineBadge();
-    const info = document.getElementById('menuEngineInfo');
-    if (info) {
-      info.textContent = `内核：${kernelLabelForActiveTab()} · 版本 ${status.version} · 内存 ${status.memoryMB} MB`;
-    }
-    if (state.engineMode === 'scramjet') {
-      bootScramjet();
-    }
-
-    state.settings = await settingsResp.json();
-    if (typeof state.settings.showBookmarksBar === 'boolean') {
-      state.ui.showBookmarksBar = state.settings.showBookmarksBar;
-    }
-    updateHttpsSection();
-    if (!window.isSecureContext && state.https.enabled) {
-      const bar = document.getElementById('httpsPromptBar');
-      const link = document.getElementById('httpsPromptLink');
-      if (bar && link) {
-        link.href = httpsShellUrl();
-        bar.style.display = 'flex';
-        document.getElementById('httpsPromptClose').onclick = () => { bar.style.display = 'none'; };
+function refreshNewTabPages() {
+  state.tabs.filter((tab) => tab.url === 'fn://newtab').forEach((tab) => {
+    const pane = document.getElementById(`pane-${tab.id}`);
+    if (pane) {
+      const input = document.getElementById(`heroInput-${tab.id}`);
+      const value = input ? input.value : '';
+      const focused = input && document.activeElement === input;
+      const selection = input ? [input.selectionStart, input.selectionEnd] : null;
+      renderNewTabPage(pane, tab.id);
+      const refreshed = document.getElementById(`heroInput-${tab.id}`);
+      if (refreshed) {
+        refreshed.value = value;
+        if (focused) {
+          refreshed.focus();
+          refreshed.setSelectionRange(...selection);
+        }
       }
+      applyZoom(tab);
     }
-    applyTheme(state.settings.theme || 'system');
-  } catch (e) {
-    applyTheme('system');
-  }
+  });
+}
 
-  await loadBookmarks();
-  refreshHistoryCache();
-  createTab('fn://newtab');
-})();
+async function loadStartupStatus() {
+  const status = await fetchJson('/api/status', { headers: authHeaders() });
+  if (!status || typeof status !== 'object' || Array.isArray(status)) throw new Error('内核状态无效');
+  state.engineMode = status.engine || 'lite';
+  if (status.https) {
+    state.https = {
+      enabled: !!status.https.enabled,
+      port: status.https.port || 18921,
+      mode: status.https.mode || 'ca'
+    };
+  }
+  const badge = document.getElementById('engineBadge');
+  if (badge) badge.title = `内存占用: ${status.memoryMB} MB`;
+  updateEngineBadge();
+  updateHttpsSection();
+  if (!window.isSecureContext && state.https.enabled) {
+    const bar = document.getElementById('httpsPromptBar');
+    const link = document.getElementById('httpsPromptLink');
+    if (bar && link) {
+      link.href = httpsShellUrl();
+      bar.style.display = 'flex';
+      document.getElementById('httpsPromptClose').onclick = () => { bar.style.display = 'none'; };
+    }
+  }
+  if (window.isSecureContext && state.engineMode === 'scramjet') bootScramjet();
+}
+
+async function loadStartupSettings() {
+  const settings = await fetchJson('/api/settings', { headers: authHeaders() });
+  if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('设置数据无效');
+  state.settings = { ...state.settings, ...settings };
+  if (typeof settings.showBookmarksBar === 'boolean') state.ui.showBookmarksBar = settings.showBookmarksBar;
+  applyTheme(state.settings.theme || 'system');
+  renderBookmarkBar();
+  refreshNewTabPages();
+}
+
+// 认证完成即展示主页；设置、书签、历史与代理内核独立加载、独立失败。
+function init() {
+  if (state.startup.promise) return state.startup.promise;
+  state.startup.promise = (async () => {
+    applyTheme(state.settings.theme || 'system');
+    if (!await ensureAuthenticated()) return;
+    state.startup.authenticated = true;
+    setStartupIssue('auth', '');
+    setStartupIssue('startup', '');
+    if (!state.tabs.length) createTab('fn://newtab');
+    const tasks = [
+      ['status', '内核状态', loadStartupStatus],
+      ['settings', '设置', loadStartupSettings],
+      ['bookmarks', '书签', loadBookmarks],
+      ['history', '历史记录', () => refreshHistoryCache(true)]
+    ];
+    await Promise.all(tasks.map(async ([key, label, load]) => {
+      try {
+        await load();
+        setStartupIssue(key, '');
+      } catch (err) {
+        setStartupIssue(key, `${label}加载失败，可重试`);
+        console.warn('[fn-browser] ' + label + '加载失败:', err);
+      }
+    }));
+  })().catch((err) => {
+    setStartupIssue('startup', '启动失败，可重试');
+    console.warn('[fn-browser] 初始化失败:', err);
+  }).finally(() => {
+    state.startup.promise = null;
+  });
+  return state.startup.promise;
+}
+document.getElementById('startupRetryBtn').onclick = () => init();
+init();
 </script>
 </body>
 </html>

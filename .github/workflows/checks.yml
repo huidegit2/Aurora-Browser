@@ -1,0 +1,24 @@
+name: Source regression checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Syntax checks
+        run: |
+          for f in app/server/*.js; do node --check "$f"; done
+          node -e "const fs=require('fs'),h=fs.readFileSync('app/www/index.html','utf8');new Function(h.match(/<script>([\s\S]*)<\/script>/)[1])"
+      - name: Regression tests (no extra packages)
+        run: node --test tests/*.test.js

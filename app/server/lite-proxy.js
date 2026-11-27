@@ -24,6 +24,7 @@ function stripTokenFromSearch(search, tokenParam) {
 
 function rewriteHtmlForLiteProxy(html, baseUrl) {
     const base = new URL(baseUrl);
+    const jsString = (value) => JSON.stringify(value).replace(/</g, '\\u003c');
     const wrapUrl = (raw) => {
         if (!raw || /^(data:|javascript:|mailto:|tel:|blob:|#)/i.test(raw.trim())) {
             return raw;
@@ -44,15 +45,15 @@ function rewriteHtmlForLiteProxy(html, baseUrl) {
     window.parent.postMessage({
       type: 'fn-browser-nav',
       tabId: tabId,
-      url: ${JSON.stringify(baseUrl)},
-      title: document.title || ${JSON.stringify(base.hostname)}
+      url: ${jsString(baseUrl)},
+      title: document.title || ${jsString(base.hostname)}
     }, window.location.origin);
     window.addEventListener('load', function() {
       window.parent.postMessage({
         type: 'fn-browser-nav',
         tabId: tabId,
-        url: ${JSON.stringify(baseUrl)},
-        title: document.title || ${JSON.stringify(base.hostname)}
+        url: ${jsString(baseUrl)},
+        title: document.title || ${jsString(base.hostname)}
       }, window.location.origin);
     });
   } catch (e) {}
@@ -75,8 +76,16 @@ function rewriteHtmlForLiteProxy(html, baseUrl) {
     return out;
 }
 
-function createLiteProxy({ tokenParam }) {
+const LITE_SANDBOX = 'sandbox allow-scripts allow-forms allow-downloads';
+
+function createLiteProxy({ tokenParam, timeoutMs = 20000, maxHtmlBytes = 8 * 1024 * 1024 }) {
     return function handleLiteProxy(req, res, encodedPart, extraSearch) {
+        // Response-level sandbox also protects a directly opened proxy URL.
+        // Omitting allow-same-origin separates page scripts from our management UI.
+        res.setHeader('Content-Security-Policy', LITE_SANDBOX);
+        res.setHeader('Referrer-Policy', 'no-referrer');
+        res.setHeader('X-Content-Type-Options', 'nosniff');
+        res.setHeader('Cache-Control', 'no-store');
         let targetUrl;
         try {
             targetUrl = decodeLiteTarget(encodedPart);
@@ -110,23 +119,43 @@ function createLiteProxy({ tokenParam }) {
         delete headers['proxy-authorization'];
         delete headers[tokenParam];
         delete headers['x-aurora-token'];
+        delete headers.referer;
+        delete headers.origin;
+        delete headers.forwarded;
+        for (const name of Object.keys(headers)) {
+            if (name.startsWith('x-forwarded-') || name.startsWith('x-trim-')) delete headers[name];
+        }
         headers['host'] = parsed.host;
         headers['user-agent'] =
             headers['user-agent'] ||
             'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 Chrome/128.0.0.0 Safari/537.36';
 
+        let settled = false;
+        let proxyResponse;
+        const fail = (status, message) => {
+            if (settled || res.writableEnded || res.destroyed) return;
+            settled = true;
+            proxyReq.destroy();
+            if (proxyResponse) proxyResponse.destroy();
+            if (res.headersSent) return res.destroy();
+            res.writeHead(status, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end(message);
+        };
         const proxyReq = client.request(
             {
                 protocol: parsed.protocol,
-                hostname: parsed.hostname,
+                hostname: parsed.hostname.replace(/^\[|\]$/g, ''),
                 port: parsed.port || (parsed.protocol === 'https:' ? 443 : 80),
                 path: parsed.pathname + parsed.search,
                 method: req.method,
                 headers,
-                rejectUnauthorized: false,
-                timeout: 20000
+                timeout: timeoutMs
             },
             (proxyRes) => {
+                proxyResponse = proxyRes;
+                if (settled || res.destroyed) return proxyRes.destroy();
+                proxyRes.on('error', () => fail(502, '目标站点响应中断，请重试。'));
+                proxyRes.on('aborted', () => fail(502, '目标站点响应不完整，请重试。'));
                 const resHeaders = { ...proxyRes.headers };
                 delete resHeaders['x-frame-options'];
                 delete resHeaders['content-security-policy'];
@@ -135,15 +164,30 @@ function createLiteProxy({ tokenParam }) {
                 delete resHeaders['cross-origin-embedder-policy'];
                 delete resHeaders['cross-origin-resource-policy'];
                 delete resHeaders['strict-transport-security'];
+                for (const name of ['set-cookie', 'set-cookie2', 'clear-site-data', 'service-worker-allowed',
+                    'refresh', 'report-to', 'nel', 'access-control-allow-credentials']) {
+                    delete resHeaders[name];
+                }
+                resHeaders['content-security-policy'] = LITE_SANDBOX;
+                resHeaders['referrer-policy'] = 'no-referrer';
+                resHeaders['cache-control'] = 'no-store';
+                resHeaders['x-content-type-options'] = 'nosniff';
                 resHeaders['access-control-allow-origin'] = '*';
                 resHeaders['cross-origin-resource-policy'] = 'cross-origin';
                 resHeaders['cross-origin-embedder-policy'] = 'credentialless';
 
                 if ([301, 302, 303, 307, 308].includes(proxyRes.statusCode) && resHeaders.location) {
                     try {
-                        const nextUrl = new URL(resHeaders.location, parsed).toString();
-                        resHeaders.location = `/lite-proxy/${encodeLiteTarget(nextUrl)}`;
-                    } catch {}
+                        const next = new URL(resHeaders.location, parsed);
+                        if (!['http:', 'https:'].includes(next.protocol)) throw new Error('Unsupported redirect');
+                        resHeaders.location = `/lite-proxy/${encodeLiteTarget(next.toString())}`;
+                    } catch {
+                        return fail(502, '目标站点返回了无效的跳转地址。');
+                    }
+                    delete resHeaders['content-length'];
+                    delete resHeaders['transfer-encoding'];
+                    settled = true;
+                    proxyRes.destroy();
                     res.writeHead(proxyRes.statusCode, resHeaders);
                     return res.end();
                 }
@@ -152,8 +196,16 @@ function createLiteProxy({ tokenParam }) {
                 if (contentType.includes('text/html')) {
                     delete resHeaders['content-length'];
                     const chunks = [];
-                    proxyRes.on('data', (c) => chunks.push(c));
+                    let htmlBytes = 0;
+                    proxyRes.on('data', (c) => {
+                        if (settled) return;
+                        htmlBytes += c.length;
+                        if (htmlBytes > maxHtmlBytes) return fail(502, '页面内容过大，基础代理已停止加载。');
+                        chunks.push(c);
+                    });
                     proxyRes.on('end', () => {
+                        if (settled || res.destroyed) return;
+                        settled = true;
                         const rawHtml = Buffer.concat(chunks).toString('utf8');
                         const rewritten = rewriteHtmlForLiteProxy(rawHtml, parsed.toString());
                         resHeaders['content-type'] = 'text/html; charset=utf-8';
@@ -167,18 +219,14 @@ function createLiteProxy({ tokenParam }) {
             }
         );
 
-        proxyReq.on('timeout', () => {
-            proxyReq.destroy();
-            if (!res.headersSent) {
-                res.writeHead(504, { 'Content-Type': 'text/html; charset=utf-8' });
-                res.end(`<h3>请求超时</h3><p>无法在规定时间内连接到：${parsed.toString()}</p>`);
-            }
-        });
-
-        proxyReq.on('error', () => {
-            if (!res.headersSent) {
-                res.writeHead(502, { 'Content-Type': 'text/html; charset=utf-8' });
-                res.end('<h3>连接目标站点失败</h3><p>请检查目标地址是否可达，或目标站点是否拒绝代理访问。</p>');
+        proxyReq.on('timeout', () => fail(504, '请求超时，请检查目标地址或稍后重试。'));
+        proxyReq.on('error', () => fail(502, '连接目标站点失败，请检查地址、网络或站点证书。'));
+        req.on('aborted', () => proxyReq.destroy());
+        res.on('close', () => {
+            if (!res.writableEnded) {
+                settled = true;
+                proxyReq.destroy();
+                if (proxyResponse) proxyResponse.destroy();
             }
         });
 

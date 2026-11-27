@@ -9,6 +9,7 @@ const { readJson, writeJson, isDirWritable } = require('./storage');
 const { createTlsManager } = require('./tls');
 const { createDownloadManager } = require('./downloads');
 const { createLiteProxy } = require('./lite-proxy');
+const { isTrustedBrowserRequest, safeCookieValue } = require('./request-security');
 
 const APP_VERSION = (() => {
     try {
@@ -50,16 +51,7 @@ function buildSessionCookieHeader(req, secret) {
 }
 
 function getCookie(req, name) {
-    const raw = req.headers.cookie || '';
-    const parts = raw.split(';');
-    for (const part of parts) {
-        const eq = part.indexOf('=');
-        if (eq === -1) continue;
-        if (part.slice(0, eq).trim() === name) {
-            return decodeURIComponent(part.slice(eq + 1).trim());
-        }
-    }
-    return '';
+    return safeCookieValue(req.headers.cookie, name);
 }
 
 function isAuthorized(req, parsedUrl) {
@@ -385,8 +377,8 @@ async function handleApi(req, res, pathname, parsedUrl) {
                 }
                 const nextPass = patch.authPassword.trim();
                 patch.authPassword = nextPass;
-                activeAuthToken = nextPass;
-                extraHeaders['Set-Cookie'] = buildSessionCookieHeader(req, activeAuthToken);
+                // Activate the new password only after the entire update is validated
+                // and persisted, so a bad download directory cannot lock out the UI.
             }
             if (typeof patch.downloadDir === 'string') {
                 const targetDir = path.resolve(patch.downloadDir.trim() || DEFAULT_DOWNLOAD_DIR);
@@ -406,6 +398,10 @@ async function handleApi(req, res, pathname, parsedUrl) {
             }
             const updated = { ...current, ...patch };
             writeJson(SETTINGS_FILE, updated);
+            if (typeof patch.authPassword === 'string') {
+                activeAuthToken = patch.authPassword;
+                extraHeaders['Set-Cookie'] = buildSessionCookieHeader(req, activeAuthToken);
+            }
             const { authPassword, ...safe } = updated;
             return sendJson(
                 res,
@@ -523,6 +519,8 @@ function serveStatic(req, res, pathname) {
 // 4. 统一 HTTP & WebSocket 入口
 // ---------------------------------------------------------------------------
 const requestHandler = async (req, res) => {
+    res.setHeader('Referrer-Policy', 'no-referrer');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
     try {
         const parsedUrl = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
         const pathname = parsedUrl.pathname;
@@ -577,6 +575,10 @@ const requestHandler = async (req, res) => {
         }
 
         if (pathname.startsWith('/api/')) {
+            res.setHeader('Cache-Control', 'no-store');
+            if (!isTrustedBrowserRequest(req)) {
+                return sendJson(res, 403, { error: '不允许来自其他页面的管理请求', code: 'UNTRUSTED_ORIGIN' });
+            }
             return await handleApi(req, res, pathname, parsedUrl);
         }
 
@@ -594,7 +596,7 @@ const upgradeHandler = (req, socket, head) => {
     try {
         const parsed = new URL(req.url || '/', 'http://localhost');
         if (parsed.pathname === '/wisp/' && wispRouteRequest) {
-            if (!isAuthorized(req, parsed)) {
+            if (!isTrustedBrowserRequest(req, { requireOrigin: true }) || !isAuthorized(req, parsed)) {
                 return socket.destroy();
             }
             req.url = parsed.pathname;
