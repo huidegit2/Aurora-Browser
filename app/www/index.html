@@ -14,8 +14,10 @@
     --bg-input: #f2f4f8;
     --bg-input-focus: #ffffff;
     --bg-card: #ffffff;
-    --bg-menu: #ffffff;
+    --bg-menu: rgba(255, 255, 255, 0.94);
     --bg-sidebar: #ffffff;
+    --chrome-surface: rgba(255, 255, 255, 0.84);
+    --chrome-edge: rgba(255, 255, 255, 0.58);
     --text-primary: #1d2129;
     --text-secondary: #4e5969;
     --text-muted: #86909c;
@@ -47,6 +49,9 @@
     --text-secondary: #c9cdd4;
     --text-muted: #86909c;
     --border-color: #2e323b;
+    --bg-menu: rgba(35, 38, 46, 0.96);
+    --chrome-surface: rgba(30, 33, 40, 0.88);
+    --chrome-edge: rgba(255, 255, 255, 0.07);
     --accent: #3c7eff;
     --accent-hover: #5791ff;
     --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.28);
@@ -68,7 +73,7 @@
     width: 100%;
     height: 100%;
     overflow: hidden;
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     background: var(--bg-shell);
     color: var(--text-primary);
     user-select: none;
@@ -85,7 +90,7 @@
   .tab-strip {
     display: flex;
     align-items: flex-end;
-    height: 38px;
+    height: 40px;
     padding: 6px 10px 0 10px;
     background: var(--bg-shell);
     gap: 4px;
@@ -211,10 +216,12 @@
   .nav-bar {
     display: flex;
     align-items: center;
-    height: 46px;
+    height: 48px;
     padding: 0 12px;
-    background: var(--bg-toolbar);
-    border-bottom: 1px solid var(--border-color);
+    background: var(--chrome-surface);
+    -webkit-backdrop-filter: blur(18px) saturate(1.35);
+    backdrop-filter: blur(18px) saturate(1.35);
+    border-bottom: 1px solid var(--chrome-edge);
     gap: 8px;
     position: relative;
     z-index: 60;
@@ -232,7 +239,7 @@
     justify-content: center;
     cursor: pointer;
     font-size: 15px;
-    transition: background 0.15s;
+    transition: background 0.15s, color 0.15s, transform 0.12s ease-out;
     flex-shrink: 0;
   }
   .nav-btn:hover:not(:disabled) {
@@ -252,12 +259,12 @@
     flex: 1;
     display: flex;
     align-items: center;
-    height: 34px;
+    height: 36px;
     padding: 0 12px;
     border-radius: 17px;
     background: var(--bg-input);
     border: 1.5px solid transparent;
-    transition: all 0.15s;
+    transition: background-color 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
     gap: 8px;
     min-width: 0;
   }
@@ -295,6 +302,8 @@
     position: fixed;
     display: none;
     background: var(--bg-menu);
+    -webkit-backdrop-filter: blur(18px) saturate(1.25);
+    backdrop-filter: blur(18px) saturate(1.25);
     border: 1px solid var(--border-color);
     border-radius: 12px;
     box-shadow: var(--shadow-md);
@@ -363,8 +372,10 @@
     align-items: center;
     height: 32px;
     padding: 0 14px;
-    background: var(--bg-toolbar);
-    border-bottom: 1px solid var(--border-color);
+    background: var(--chrome-surface);
+    -webkit-backdrop-filter: blur(16px) saturate(1.25);
+    backdrop-filter: blur(16px) saturate(1.25);
+    border-bottom: 1px solid var(--chrome-edge);
     gap: 6px;
     overflow-x: auto;
     scrollbar-width: none;
@@ -558,6 +569,8 @@
     align-items: center;
     gap: 6px;
     background: var(--bg-menu);
+    -webkit-backdrop-filter: blur(18px) saturate(1.25);
+    backdrop-filter: blur(18px) saturate(1.25);
     border: 1px solid var(--border-color);
     border-radius: 10px;
     box-shadow: var(--shadow-md);
@@ -607,6 +620,8 @@
     right: 10px;
     width: 264px;
     background: var(--bg-menu);
+    -webkit-backdrop-filter: blur(18px) saturate(1.25);
+    backdrop-filter: blur(18px) saturate(1.25);
     border: 1px solid var(--border-color);
     border-radius: 12px;
     box-shadow: var(--shadow-md);
@@ -895,9 +910,11 @@
     transition: transform 0.15s, box-shadow 0.15s;
     position: relative;
   }
-  .site-card:hover {
-    transform: translateY(-2px);
-    box-shadow: var(--shadow-sm);
+  @media (hover: hover) and (pointer: fine) {
+    .site-card:hover {
+      transform: translateY(-2px);
+      box-shadow: var(--shadow-sm);
+    }
   }
   .site-avatar {
     width: 36px;
@@ -1124,6 +1141,17 @@
     justify-content: space-between;
     gap: 8px;
   }
+  @media (max-width: 420px) {
+    .diag-foot {
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .diag-foot #diagHint,
+    .diag-foot #diagCopyStatus {
+      flex-basis: 100%;
+      text-align: right;
+    }
+  }
   .fs-err { font-size: 11.5px; color: #e5484d; flex: 1; }
   .omnibox-lock {
     width: 24px;
@@ -1152,6 +1180,93 @@
     display: inline-block;
   }
   @keyframes auroraSpin { to { transform: rotate(360deg); } }
+
+  /* Shared interaction feedback */
+  button,
+  a,
+  .tab-item,
+  .bm-chip,
+  .site-card,
+  .side-row {
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  button:active:not(:disabled),
+  .bm-chip:active,
+  .site-card:active,
+  .side-row:active {
+    transform: scale(0.97);
+    transition: transform 100ms ease-out;
+  }
+  button:focus-visible,
+  a:focus-visible,
+  .tab-item:focus-visible,
+  .bm-chip:focus-visible,
+  .site-card:focus-visible,
+  .side-row:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+  input:not(.url-input):focus-visible,
+  select:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 1px;
+  }
+  @media (hover: none) {
+    .nav-btn { width: 36px; height: 36px; }
+    .new-tab-btn { width: 34px; height: 34px; }
+    .tab-item { height: 34px; }
+    .tab-close { width: 28px; height: 28px; }
+    .side-close,
+    .find-btn,
+    .omnibox-lock,
+    .star-btn { min-width: 36px; min-height: 36px; }
+    .btn,
+    .hero-search button { min-height: 38px; }
+    .site-card:hover { transform: none; box-shadow: none; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      scroll-behavior: auto !important;
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+    }
+  }
+  @media (prefers-reduced-transparency: reduce) {
+    .nav-bar,
+    .bookmark-bar,
+    .omni-dropdown,
+    .menu-popup,
+    .find-bar,
+    .modal-card,
+    .sidebar {
+      -webkit-backdrop-filter: none !important;
+      backdrop-filter: none !important;
+    }
+    .nav-bar,
+    .bookmark-bar { background: var(--bg-toolbar); }
+    .omni-dropdown,
+    .menu-popup,
+    .find-bar { background: var(--bg-menu); }
+  }
+  @media (prefers-contrast: more) {
+    :root {
+      --border-color: #707782;
+      --chrome-edge: currentColor;
+    }
+    [data-theme="dark"] {
+      --border-color: #a6abb4;
+      --chrome-edge: currentColor;
+    }
+    .nav-bar,
+    .bookmark-bar,
+    .omnibox,
+    .omni-dropdown,
+    .menu-popup,
+    .find-bar,
+    .modal-card { border-width: 2px; }
+  }
 </style>
 </head>
 <body>
@@ -1377,8 +1492,10 @@
         <button class="side-close" id="diagCloseBtn" title="关闭">×</button>
       </div>
       <div class="modal-body" id="diagBody"></div>
-      <div class="modal-foot">
+      <div class="modal-foot diag-foot">
         <span class="fs-err" id="diagHint" style="color:var(--text-muted);"></span>
+        <span id="diagCopyStatus" role="status" aria-live="polite" style="font-size:11.5px;color:var(--text-muted);"></span>
+        <button class="btn" id="diagCopyBtn" type="button">复制诊断信息</button>
         <button class="btn" id="diagRetryBtn" type="button">重新检测</button>
         <button class="btn" id="diagOkBtn" type="button" style="background:var(--accent);color:#fff;border-color:var(--accent);">完成</button>
       </div>
@@ -1929,26 +2046,28 @@ function installFramePopupGuards(frame) {
   try {
     if (!doc.__auroraClickGuard) {
       doc.__auroraClickGuard = true;
-      doc.addEventListener(
-        'click',
-        (e) => {
-          const t = e.target;
-          const a = t && t.closest ? t.closest('a[href], area[href]') : null;
-          if (!a) return;
-          const raw = a.getAttribute('href') || '';
-          if (/^(javascript:|data:|blob:|mailto:|tel:|#)/i.test(raw)) return;
-          // Leave download links to the browser; do not turn them into proxy tabs.
-          if (a.hasAttribute('download')) return;
-          const targetAttr = (a.getAttribute('target') || '').toLowerCase();
-          if (targetAttr === '_blank' || e.button === 1 || e.ctrlKey || e.metaKey) {
-            e.preventDefault();
-            e.stopPropagation();
-            if (e.stopImmediatePropagation) e.stopImmediatePropagation();
-            openTabFromFramePopup(a.href || raw, win);
-          }
-        },
-        true
-      );
+      const handleLinkActivation = (e) => {
+        const t = e.target;
+        const a = t && t.closest ? t.closest('a[href], area[href]') : null;
+        if (!a) return;
+        const raw = a.getAttribute('href') || '';
+        if (/^(javascript:|data:|blob:|mailto:|tel:|#)/i.test(raw)) return;
+        // Leave download links to the browser; do not turn them into proxy tabs.
+        if (a.hasAttribute('download')) return;
+        const targetAttr = (a.getAttribute('target') || '').toLowerCase();
+        if (targetAttr !== '_blank' && e.button !== 1 && !e.ctrlKey && !e.metaKey) return;
+        e.preventDefault();
+        e.stopPropagation();
+        if (e.stopImmediatePropagation) e.stopImmediatePropagation();
+        openTabFromFramePopup(a.href || raw, win);
+      };
+      // Capture static _blank links early, then observe again at bubble time in case
+      // page handlers assign target="_blank" during the same click dispatch.
+      doc.addEventListener('click', handleLinkActivation, true);
+      doc.addEventListener('click', handleLinkActivation, false);
+      // Chromium reports middle-button activation as auxclick, not click.
+      doc.addEventListener('auxclick', handleLinkActivation, true);
+      doc.addEventListener('auxclick', handleLinkActivation, false);
     }
   } catch {}
 }
@@ -3454,11 +3573,66 @@ window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () 
 });
 
 // 连接自检诊断面板
+let latestDiagnostics = [];
+
+function buildDiagnosticReport(items) {
+  const labels = {
+    ctx: '安全上下文',
+    sw: 'Service Worker',
+    tls: 'HTTPS 入口',
+    ws: 'Wisp WebSocket'
+  };
+  const lines = ['Aurora-Browser 连接诊断'];
+  for (const [key, label] of Object.entries(labels)) {
+    const item = items.find((entry) => entry.key === key);
+    const result = !item || item.ok === null ? '检测中' : (item.ok ? '正常' : '异常');
+    const status = key === 'tls' && Number.isInteger(item?.status) && item.status >= 100 && item.status <= 599
+      ? ` (HTTP ${item.status})`
+      : '';
+    lines.push(`- ${label}: ${result}${status}`);
+  }
+  lines.push('', '仅包含检测状态和 HTTPS 响应码；不包含网址、主机名、IP、密码、令牌、Cookie 或浏览器完整标识。此信息仅在点击后复制，不会自动上传。');
+  return lines.join('\n');
+}
+
+async function copyDiagnosticText(text) {
+  try {
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+
+  let field;
+  try {
+    field = document.createElement('textarea');
+    field.value = text;
+    field.setAttribute('readonly', '');
+    field.style.position = 'fixed';
+    field.style.opacity = '0';
+    document.body.appendChild(field);
+    field.select();
+    return Boolean(document.execCommand && document.execCommand('copy'));
+  } catch {
+    return false;
+  } finally {
+    if (field) field.remove();
+  }
+}
+
+async function copyDiagnostics() {
+  const status = document.getElementById('diagCopyStatus');
+  const copied = await copyDiagnosticText(buildDiagnosticReport(latestDiagnostics));
+  if (status) status.textContent = copied ? '已复制' : '复制失败，请检查浏览器权限';
+}
+
 async function runDiagnostics() {
   const body = document.getElementById('diagBody');
   const hint = document.getElementById('diagHint');
   if (!body) return;
   if (hint) hint.textContent = '正在检测…';
+  const copyStatus = document.getElementById('diagCopyStatus');
+  if (copyStatus) copyStatus.textContent = '';
 
   const items = [
     { key: 'ctx', name: '1. 安全上下文 (HTTPS / localhost)', ok: null, detail: '检测中…' },
@@ -3466,6 +3640,7 @@ async function runDiagnostics() {
     { key: 'tls', name: '3. HTTPS / 证书连通性', ok: null, detail: '检测中…' },
     { key: 'ws', name: '4. Wisp WebSocket 通道', ok: null, detail: '检测中…' }
   ];
+  latestDiagnostics = items;
 
   const render = () => {
     body.innerHTML = items
@@ -3503,6 +3678,7 @@ async function runDiagnostics() {
     const probeUrl = location.protocol === 'https:' ? '/healthz' : httpsShellUrl() + 'healthz';
     const resp = await fetch(probeUrl, { cache: 'no-store' });
     items[2].ok = resp.ok;
+    items[2].status = resp.status;
     items[2].detail = resp.ok ? `HTTPS 探活成功 (${probeUrl})` : `HTTPS 返回异常 HTTP ${resp.status}`;
   } catch (err) {
     items[2].ok = false;
@@ -3560,6 +3736,7 @@ function closeDiagnosticsModal() {
 document.getElementById('diagCloseBtn').onclick = closeDiagnosticsModal;
 document.getElementById('diagOkBtn').onclick = closeDiagnosticsModal;
 document.getElementById('diagRetryBtn').onclick = runDiagnostics;
+document.getElementById('diagCopyBtn').onclick = copyDiagnostics;
 
 function updateAuthPassStatus() {
   const statusEl = document.getElementById('authPassStatus');

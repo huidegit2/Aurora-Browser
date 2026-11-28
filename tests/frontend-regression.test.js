@@ -77,7 +77,8 @@ function harness(options = {}) {
       },
       querySelectorAll() { return []; },
       focus() {},
-      blur() {}
+      blur() {},
+      select() {}
     };
     Object.defineProperties(node, {
       id: {
@@ -93,8 +94,16 @@ function harness(options = {}) {
           if (iframe) {
             const frame = element();
             frame.tagName = 'IFRAME';
-            frame.contentWindow = {};
-            frame.contentDocument = { title: '' };
+            frame.contentWindow = { open() {} };
+            const documentListeners = new Map();
+            frame.contentDocument = {
+              title: '',
+              listeners: documentListeners,
+              addEventListener(name, callback, capture = false) {
+                if (!documentListeners.has(name)) documentListeners.set(name, []);
+                documentListeners.get(name).push({ callback, capture });
+              }
+            };
             for (const [, name, attrValue] of iframe[1].matchAll(/([\w-]+)="([^"]*)"/g)) {
               frame.attributes[name] = attrValue;
               if (name === 'id') frame.id = attrValue;
@@ -111,14 +120,18 @@ function harness(options = {}) {
 
   for (const id of ['authLockModal', 'authLockInput', 'authLockErr', 'authLockSubmitBtn',
     'startupNotice', 'startupRetryBtn', 'viewportContainer', 'loadingBar', 'statusText',
-    'urlInput', 'backBtn', 'forwardBtn', 'starBtn', 'omniboxLockBtn', 'engineBadge', 'menuEngineInfo']) element(id);
+    'urlInput', 'backBtn', 'forwardBtn', 'starBtn', 'omniboxLockBtn', 'engineBadge', 'menuEngineInfo',
+    'diagCopyBtn', 'diagCopyStatus', 'body']) element(id);
   const document = {
     title: 'Aurora', activeElement: null,
+    body: null,
+    execCommand: () => typeof options.execCommand === 'function' ? options.execCommand(document) : Boolean(options.execCommand),
     getElementById: (id) => nodes.get(id) || null,
     createElement(tag) { const node = element(); node.tagName = tag.toUpperCase(); return node; },
     querySelectorAll(selector) { return selector === '.tab-pane' ? [...nodes.values()].filter((node) => node.id.startsWith('pane-')) : []; },
     head: { appendChild(script) { scripts.push(script); if (options.autoLoadScripts !== false) queueMicrotask(() => script.onload?.()); } }
   };
+  document.body = nodes.get('body');
   const context = vm.createContext({
     URL, TextEncoder, TextDecoder, AbortController, document,
     location: { href: options.href || 'https://aurora.test/', origin: 'https://aurora.test', protocol: 'https:', host: 'aurora.test' },
@@ -150,6 +163,7 @@ function harness(options = {}) {
   vm.runInContext(source.slice(stateStart, source.indexOf('// Base64URL', stateStart)), context);
   context.state = vm.runInContext('state', context);
   context.state.startup.authenticated = options.authenticated !== false;
+  vm.runInContext('let latestDiagnostics = [];', context);
   vm.runInContext(source.slice(source.indexOf("let auroraToken = ''"), source.indexOf('function authHeaders')), context);
   vm.runInContext('const scriptLoads = new Map(); const closedTabUrls = [];', context);
   const names = ['authHeaders', 'withToken', 'withTimeout', 'fetchJson', 'setStartupIssue', 'loadScriptTag',
@@ -157,7 +171,8 @@ function harness(options = {}) {
     'watchTabFrame', 'navigateWithScramjet', 'navigateWithLite', 'createTab', 'closeTab', 'switchTab',
     'getActiveTab', 'navigateTab', 'syncLoadingIndicator', 'showLoading', 'syncToolbarWithActiveTab',
     'loadBookmarks', 'refreshHistoryCache', 'ensureAuthenticated', 'refreshNewTabPages',
-    'loadStartupStatus', 'loadStartupSettings', 'init', 'onFrameNavigationMessage'];
+    'loadStartupStatus', 'loadStartupSettings', 'init', 'onFrameNavigationMessage',
+    'buildDiagnosticReport', 'copyDiagnosticText', 'copyDiagnostics'];
   for (const name of names) vm.runInContext(applicationFunction(name), context, { filename: `index.html:${name}` });
 
   function addTab(id, url = `https://${id}.test/`) {
@@ -213,40 +228,122 @@ test('complete inline application script parses', () => {
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
-test('frame download links keep native behavior while ordinary popup links still open Aurora tabs', () => {
+test('diagnostic export uses an allowlist and omits URLs, host details and browser identifiers', () => {
+  const h = harness();
+  const report = h.context.buildDiagnosticReport([
+    { key: 'ctx', ok: true, detail: 'https://private.example/path?token=secret', origin: 'https://192.168.1.8' },
+    { key: 'sw', ok: false, detail: 'Cookie: private-cookie' },
+    { key: 'tls', ok: true, status: 204, detail: 'https://192.168.1.8:18921/healthz' },
+    { key: 'ws', ok: null, detail: 'AUTH_TOKEN=secret', userAgent: 'Private full browser UA' }
+  ]);
+
+  assert.match(report, /安全上下文: 正常/);
+  assert.match(report, /Service Worker: 异常/);
+  assert.match(report, /HTTPS 入口: 正常 \(HTTP 204\)/);
+  assert.match(report, /Wisp WebSocket: 检测中/);
+  for (const privateValue of ['private.example', '192.168.1.8', 'secret', 'private-cookie', 'Private full browser UA', '/healthz']) {
+    assert.equal(report.includes(privateValue), false, `Diagnostic export leaked ${privateValue}`);
+  }
+  assert.match(report, /不会自动上传/);
+});
+
+test('diagnostic copy supports the clipboard API and legacy fallback, then reports the result', async () => {
+  let legacyCopiedText = '';
+  const h = harness({ execCommand(document) {
+    legacyCopiedText = document.body.children.find((child) => child.tagName === 'TEXTAREA')?.value || '';
+    return Boolean(legacyCopiedText);
+  } });
+  let copiedText = '';
+  h.context.navigator.clipboard = { async writeText(text) { copiedText = text; } };
+  assert.equal(await h.context.copyDiagnosticText('safe summary'), true);
+  assert.equal(copiedText, 'safe summary');
+
+  delete h.context.navigator.clipboard;
+  assert.equal(await h.context.copyDiagnosticText('legacy summary'), true);
+  assert.equal(legacyCopiedText, 'legacy summary');
+  assert.equal(h.nodes.get('body').children.length, 0);
+
+  h.context.navigator.clipboard = { async writeText(text) { copiedText = text; } };
+  h.context.testDiagnosticData = [{ key: 'ctx', ok: true }];
+  vm.runInContext('latestDiagnostics = testDiagnosticData', h.context);
+  await h.context.copyDiagnostics();
+  assert.equal(h.nodes.get('diagCopyStatus').textContent, '已复制');
+  assert.match(copiedText, /安全上下文: 正常/);
+
+  h.context.navigator.clipboard = undefined;
+  h.context.document.execCommand = () => false;
+  await h.context.copyDiagnostics();
+  assert.equal(h.nodes.get('diagCopyStatus').textContent, '复制失败，请检查浏览器权限');
+});
+
+test('frame popup links open Aurora tabs across click phases while downloads stay native', () => {
   const h = harness();
   const listeners = new Map();
   const opened = [];
   const frameWindow = { open() {} };
-  const frameDocument = { addEventListener: (name, callback) => listeners.set(name, callback) };
+  const frameDocument = { addEventListener(name, callback, capture = false) {
+    if (!listeners.has(name)) listeners.set(name, []);
+    listeners.get(name).push({ callback, capture });
+  } };
   h.context.openTabFromFramePopup = (url) => opened.push(url);
   vm.runInContext(applicationFunction('installFramePopupGuards'), h.context);
   h.context.installFramePopupGuards({ contentWindow: frameWindow, contentDocument: frameDocument });
-  const click = listeners.get('click');
-  assert.equal(typeof click, 'function');
-  function followLink(download, modifiers = {}) {
-    const anchor = {
-      href: 'https://files.test/report.pdf',
-      getAttribute: (name) => ({ href: '/report.pdf', target: '_blank' })[name] || '',
-      hasAttribute: (name) => name === 'download' && download
-    };
+  assert.equal(frameWindow.__auroraOpenWrapped, true);
+  assert.equal(listeners.get('click').length, 2);
+  assert.equal(listeners.get('auxclick').length, 2);
+
+  function followLink({ download = false, target = '_blank', type = 'click', button = 0,
+    ctrlKey = false, metaKey = false, targetAfterCapture = null } = {}) {
     let prevented = false;
     let stopped = false;
-    click({
+    let targetAttr = target;
+    const anchor = {
+      href: 'https://files.test/report.pdf',
+      getAttribute(name) { return name === 'href' ? '/report.pdf' : name === 'target' ? targetAttr : ''; },
+      hasAttribute(name) { return name === 'download' && download; }
+    };
+    const event = {
+      type, button, ctrlKey, metaKey,
       target: { closest: () => anchor },
       preventDefault() { prevented = true; },
       stopPropagation() { stopped = true; },
-      stopImmediatePropagation() { stopped = true; },
-      ...modifiers
-    });
+      stopImmediatePropagation() { stopped = true; }
+    };
+    for (const capture of [true, false]) {
+      if (capture === false && targetAfterCapture !== null) targetAttr = targetAfterCapture;
+      for (const listener of listeners.get(type) || []) {
+        if (listener.capture === capture && !stopped) listener.callback(event);
+      }
+    }
     return { prevented, stopped };
   }
-  assert.deepEqual(followLink(true), { prevented: false, stopped: false });
-  assert.deepEqual(followLink(true, { ctrlKey: true }), { prevented: false, stopped: false });
-  assert.deepEqual(opened, []);
+
+  assert.deepEqual(followLink({ download: true }), { prevented: false, stopped: false });
+  assert.deepEqual(followLink({ download: true, ctrlKey: true }), { prevented: false, stopped: false });
+  assert.deepEqual(followLink({ target: '', targetAfterCapture: '_blank' }), { prevented: true, stopped: true });
+  assert.deepEqual(followLink({ target: '', type: 'auxclick', button: 1 }), { prevented: true, stopped: true });
+  assert.deepEqual(followLink({ target: '', ctrlKey: true }), { prevented: true, stopped: true });
+  assert.deepEqual(followLink({ target: '_blank' }), { prevented: true, stopped: true });
+  assert.deepEqual(opened, [
+    'https://files.test/report.pdf',
+    'https://files.test/report.pdf',
+    'https://files.test/report.pdf',
+    'https://files.test/report.pdf'
+  ]);
   assert.equal(h.requests.length, 0);
-  assert.deepEqual(followLink(false), { prevented: true, stopped: true });
-  assert.deepEqual(opened, ['https://files.test/report.pdf']);
+});
+
+test('live iframe installs popup guards on its load event', () => {
+  const h = harness();
+  const { tab, pane } = h.addTab('popup-test');
+  pane.innerHTML = '<iframe class="proxy-frame" id="frame-popup-test"></iframe>';
+  const frame = pane.querySelector('.proxy-frame');
+  vm.runInContext(applicationFunction('installFramePopupGuards'), h.context);
+  h.context.watchTabFrame(tab, pane, frame, tab.navigationSeq);
+  frame.dispatch('load');
+  assert.equal(frame.contentWindow.__auroraOpenWrapped, true);
+  assert.equal(frame.contentDocument.listeners.get('click').length, 2);
+  assert.equal(frame.contentDocument.listeners.get('auxclick').length, 2);
 });
 
 test('download shortcut is left to the host browser after NAS management is removed', () => {
