@@ -121,7 +121,8 @@ function harness(options = {}) {
   for (const id of ['authLockModal', 'authLockInput', 'authLockErr', 'authLockSubmitBtn',
     'startupNotice', 'startupRetryBtn', 'viewportContainer', 'loadingBar', 'statusText',
     'urlInput', 'backBtn', 'forwardBtn', 'starBtn', 'omniboxLockBtn', 'engineBadge', 'menuEngineInfo',
-    'diagCopyBtn', 'diagCopyStatus', 'body']) element(id);
+    'diagCopyBtn', 'diagCopyStatus', 'privateNetworkProxyToggle', 'privateNetworkProxyStatus',
+    'tabSleepMinutesSelect', 'tabSleepStatus', 'body']) element(id);
   const document = {
     title: 'Aurora', activeElement: null,
     body: null,
@@ -171,6 +172,8 @@ function harness(options = {}) {
     'watchTabFrame', 'navigateWithScramjet', 'navigateWithLite', 'createTab', 'closeTab', 'switchTab',
     'getActiveTab', 'navigateTab', 'syncLoadingIndicator', 'showLoading', 'syncToolbarWithActiveTab',
     'loadBookmarks', 'refreshHistoryCache', 'ensureAuthenticated', 'refreshNewTabPages',
+    'clearTabSleepTimer', 'tabHasActiveMedia', 'sleepTab', 'wakeTab', 'toggleTabSleep', 'scheduleBackgroundTabSleep',
+    'refreshBackgroundTabSleepTimers', 'updatePrivateNetworkProxyControl', 'togglePrivateNetworkProxy', 'setTabSleepMinutes',
     'loadStartupStatus', 'loadStartupSettings', 'init', 'onFrameNavigationMessage',
     'buildDiagnosticReport', 'copyDiagnosticText', 'copyDiagnostics'];
   for (const name of names) vm.runInContext(applicationFunction(name), context, { filename: `index.html:${name}` });
@@ -223,6 +226,75 @@ function installFrameRegistry(h) {
   h.state.sj.controller = controller;
   return controller;
 }
+
+test('private-network setting control reflects runtime state and sends the persisted toggle', async () => {
+  let body;
+  const h = harness({ fetch: async (url, init = {}) => {
+    if (url === '/api/settings' && init.method === 'PUT') {
+      body = JSON.parse(init.body);
+      return response({ allowPrivateNetworkProxy: true, privateNetworkProxyLocked: false });
+    }
+    return response({});
+  } });
+  h.context.updatePrivateNetworkProxyControl();
+  assert.equal(h.nodes.get('privateNetworkProxyToggle').textContent, '已关闭');
+  await h.context.togglePrivateNetworkProxy();
+  assert.deepEqual(body, { allowPrivateNetworkProxy: true });
+  assert.equal(h.state.privateNetworkProxy, true);
+  assert.equal(h.nodes.get('privateNetworkProxyToggle').getAttribute('aria-checked'), 'true');
+});
+
+test('manual and timed tab sleep release background frames and restore on activation', async () => {
+  const h = harness();
+  const a = h.addTab('a');
+  a.pane.innerHTML = '<iframe class="proxy-frame" id="frame-a"></iframe>';
+  a.pane.children[0].contentDocument.querySelectorAll = () => [];
+  const b = h.addTab('b');
+  b.pane.innerHTML = '<iframe class="proxy-frame" id="frame-b"></iframe>';
+  b.pane.children[0].contentDocument.querySelectorAll = () => [];
+  assert.equal(h.context.sleepTab('a', true), true);
+  assert.equal(a.tab.sleeping, true);
+  assert.match(a.pane.innerHTML, /tab-sleep-message/);
+  h.context.switchTab('a');
+  await flush();
+  assert.equal(a.tab.sleeping, false);
+  assert.equal(a.pane.children[0].tagName, 'IFRAME');
+
+  h.state.settings.autoSleepMinutes = 15;
+  const c = h.addTab('c');
+  c.pane.innerHTML = '<iframe class="proxy-frame" id="frame-c"></iframe>';
+  c.pane.children[0].contentDocument.querySelectorAll = () => [];
+  h.context.switchTab('b');
+  h.context.switchTab('c');
+  h.fire(15 * 60 * 1000);
+  assert.equal(h.state.tabs.find((tab) => tab.id === 'b').sleeping, true);
+});
+
+test('visible tab sleep action sleeps a background tab and restores it on the wake action', async () => {
+  const h = harness();
+  const a = h.addTab('a');
+  a.pane.innerHTML = '<iframe class="proxy-frame" id="frame-a"></iframe>';
+  h.addTab('b');
+
+  assert.match(source, /class="tab-sleep-btn"/);
+  assert.equal(h.context.toggleTabSleep('a'), true);
+  assert.equal(a.tab.sleeping, true);
+  assert.equal(h.context.toggleTabSleep('a'), true);
+  await flush();
+  assert.equal(h.state.activeTabId, 'a');
+  assert.equal(a.tab.sleeping, false);
+});
+
+test('automatic tab sleep leaves active media and the active tab untouched', () => {
+  const h = harness();
+  const a = h.addTab('a');
+  a.pane.innerHTML = '<iframe class="proxy-frame" id="frame-a"></iframe>';
+  a.pane.children[0].contentDocument.querySelectorAll = () => [{ paused: false, ended: false }];
+  h.addTab('b');
+  assert.equal(h.context.sleepTab('b', false), false);
+  assert.equal(h.context.sleepTab('a', false), false);
+  assert.equal(a.tab.sleeping, undefined);
+});
 
 test('complete inline application script parses', () => {
   assert.doesNotThrow(() => new vm.Script(source));
@@ -515,7 +587,7 @@ test('private targets remain blocked by the UI until the server explicitly enabl
   assert.equal(h.context.canUseScramjet('https://example.com/'), true);
   await h.context.navigateTab('a', 'http://192.168.1.1/');
   assert.equal(tab.kernel, 'blocked');
-  assert.match(pane.innerHTML, /局域网访问已阻止/);
+  assert.match(pane.innerHTML, /局域网访问已关闭/);
   assert.equal(h.requests.length, 0);
   h.state.privateNetworkProxy = true;
   assert.equal(h.context.canUseScramjet('http://192.168.1.1/'), true);

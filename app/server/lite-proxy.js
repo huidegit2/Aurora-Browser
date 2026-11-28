@@ -115,7 +115,11 @@ function createLiteProxy({ tokenParam, timeoutMs = 20000, dnsTimeoutMs = 5000, m
         let dnsTimer;
         try {
             targetResolution = await Promise.race([
-                resolveTarget(parsed.hostname, { allowPrivateNetworkProxy }),
+                resolveTarget(parsed.hostname, {
+                    allowPrivateNetworkProxy: typeof allowPrivateNetworkProxy === 'function'
+                        ? Boolean(allowPrivateNetworkProxy())
+                        : Boolean(allowPrivateNetworkProxy)
+                }),
                 new Promise((_, reject) => {
                     dnsTimer = setTimeout(() => reject(Object.assign(new Error('目标域名解析超时'), { code: 'TARGET_DNS_TIMEOUT' })), dnsTimeoutMs);
                 })
@@ -125,7 +129,7 @@ function createLiteProxy({ tokenParam, timeoutMs = 20000, dnsTimeoutMs = 5000, m
             const timedOut = err && err.code === 'TARGET_DNS_TIMEOUT';
             res.writeHead(privateTarget ? 403 : timedOut ? 504 : 502, { 'Content-Type': 'text/plain; charset=utf-8' });
             return res.end(privateTarget
-                ? '局域网目标访问默认关闭。确认网络可信后，可设置 ALLOW_PRIVATE_NETWORK_PROXY=1 并重启应用。'
+                ? '局域网目标访问已关闭。请在 Aurora 设置的“安全与访问控制”中开启后重试。'
                 : timedOut ? '目标域名解析超时，请检查 DNS 或稍后重试。'
                     : '目标域名解析失败，请检查地址或 DNS。');
         } finally {

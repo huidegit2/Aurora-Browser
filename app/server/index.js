@@ -23,7 +23,10 @@ const APP_VERSION = (() => {
 
 const ENV_AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 const TOKEN_PARAM = '_aurora_token';
-const ALLOW_PRIVATE_NETWORK_PROXY = process.env.ALLOW_PRIVATE_NETWORK_PROXY === '1';
+const ENV_PRIVATE_NETWORK_PROXY = process.env.ALLOW_PRIVATE_NETWORK_PROXY;
+const ENV_PRIVATE_NETWORK_PROXY_LOCKED = typeof ENV_PRIVATE_NETWORK_PROXY === 'string' && ENV_PRIVATE_NETWORK_PROXY.trim() !== '';
+let allowPrivateNetworkProxy = ENV_PRIVATE_NETWORK_PROXY === '1';
+let wispServerInstance = null;
 const SESSION_COOKIE_NAME = 'aurora_session';
 let activeAuthToken = ENV_AUTH_TOKEN;
 
@@ -98,12 +101,15 @@ const DEFAULT_SETTINGS = {
     searchEngine: 'bing',
     theme: 'system',
     homepageMode: 'dashboard',
-    maxHistory: 200
+    maxHistory: 200,
+    allowPrivateNetworkProxy: false,
+    autoSleepMinutes: 0
 };
 
 readJson(BOOKMARKS_FILE, DEFAULT_BOOKMARKS);
 readJson(HISTORY_FILE, []);
 const initSettings = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+if (!ENV_PRIVATE_NETWORK_PROXY_LOCKED) allowPrivateNetworkProxy = initSettings.allowPrivateNetworkProxy === true;
 if (!ENV_AUTH_TOKEN && initSettings.authPassword) {
     activeAuthToken = String(initSettings.authPassword);
 }
@@ -117,7 +123,7 @@ const tlsManager = createTlsManager({
 
 const handleLiteProxy = createLiteProxy({
     tokenParam: TOKEN_PARAM,
-    allowPrivateNetworkProxy: ALLOW_PRIVATE_NETWORK_PROXY,
+    allowPrivateNetworkProxy: () => allowPrivateNetworkProxy,
     resolveTarget: resolveTargetAddresses
 });
 
@@ -133,8 +139,8 @@ try {
     const { controllerPath } = require('@mercuryworkshop/scramjet-controller/path');
     const utilsDir = path.dirname(require.resolve('@mercuryworkshop/scramjet-utils'));
     const epoxyDir = path.dirname(require.resolve('@mercuryworkshop/epoxy-transport'));
-    const wispServer = require('@mercuryworkshop/wisp-js/server').server;
-    if (typeof wispServer.routeRequest !== 'function') {
+    wispServerInstance = require('@mercuryworkshop/wisp-js/server').server;
+    if (typeof wispServerInstance.routeRequest !== 'function') {
         throw new Error('wisp-js server.routeRequest unavailable');
     }
     sjAssetDirs = {
@@ -143,8 +149,8 @@ try {
         '/utils/': utilsDir,
         '/epoxy/': epoxyDir
     };
-    configureWispPrivateNetwork(wispServer, ALLOW_PRIVATE_NETWORK_PROXY);
-    wispRouteRequest = wispServer.routeRequest.bind(wispServer);
+    configureWispPrivateNetwork(wispServerInstance, allowPrivateNetworkProxy);
+    wispRouteRequest = wispServerInstance.routeRequest.bind(wispServerInstance);
     engineMode = 'scramjet';
     console.log('[fn-browser] Scramjet + Wisp 内核已就绪');
 } catch (err) {
@@ -280,7 +286,8 @@ async function handleApi(req, res, pathname, parsedUrl) {
         return sendJson(res, 200, {
             ok: true,
             engine: engineMode,
-            privateNetworkProxy: ALLOW_PRIVATE_NETWORK_PROXY,
+            privateNetworkProxy: allowPrivateNetworkProxy,
+            privateNetworkProxyLocked: ENV_PRIVATE_NETWORK_PROXY_LOCKED,
             https: { enabled: hs.enabled, port: hs.port, mode: hs.mode },
             version: APP_VERSION,
             uptime: Math.floor(process.uptime()),
@@ -351,12 +358,25 @@ async function handleApi(req, res, pathname, parsedUrl) {
             const { authPassword, downloadDir, ...safe } = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
             return sendJson(res, 200, {
                 ...safe,
+                allowPrivateNetworkProxy,
+                privateNetworkProxyLocked: ENV_PRIVATE_NETWORK_PROXY_LOCKED,
                 hasAuthPassword: Boolean(authPassword),
                 envLocked: Boolean(ENV_AUTH_TOKEN)
             });
         }
         if (req.method === 'PUT') {
             const patch = await parseBody(req);
+            const hasPrivateNetworkPatch = Object.prototype.hasOwnProperty.call(patch, 'allowPrivateNetworkProxy');
+            if (hasPrivateNetworkPatch && typeof patch.allowPrivateNetworkProxy !== 'boolean') {
+                return sendJson(res, 400, { error: 'allowPrivateNetworkProxy must be a boolean' });
+            }
+            if (hasPrivateNetworkPatch && ENV_PRIVATE_NETWORK_PROXY_LOCKED) {
+                return sendJson(res, 400, { error: 'ALLOW_PRIVATE_NETWORK_PROXY is fixed by the server environment' });
+            }
+            const hasTabSleepPatch = Object.prototype.hasOwnProperty.call(patch, 'autoSleepMinutes');
+            if (hasTabSleepPatch && ![0, 15, 30, 60].includes(patch.autoSleepMinutes)) {
+                return sendJson(res, 400, { error: 'autoSleepMinutes must be 0, 15, 30 or 60' });
+            }
             const current = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
             // Ignore the removed download preference without touching its old directory.
             delete patch.downloadDir;
@@ -372,7 +392,19 @@ async function handleApi(req, res, pathname, parsedUrl) {
                 // and persisted, so a failed settings write cannot lock out the UI.
             }
             const updated = { ...current, ...patch };
-            writeJson(SETTINGS_FILE, updated);
+            const previousPrivateNetworkPolicy = allowPrivateNetworkProxy;
+            if (hasPrivateNetworkPatch && wispServerInstance) {
+                configureWispPrivateNetwork(wispServerInstance, patch.allowPrivateNetworkProxy);
+            }
+            try {
+                writeJson(SETTINGS_FILE, updated);
+            } catch (err) {
+                if (hasPrivateNetworkPatch && wispServerInstance) {
+                    configureWispPrivateNetwork(wispServerInstance, previousPrivateNetworkPolicy);
+                }
+                throw err;
+            }
+            if (hasPrivateNetworkPatch) allowPrivateNetworkProxy = patch.allowPrivateNetworkProxy;
             if (typeof patch.authPassword === 'string') {
                 activeAuthToken = patch.authPassword;
                 extraHeaders['Set-Cookie'] = buildSessionCookieHeader(req, activeAuthToken);
@@ -383,6 +415,8 @@ async function handleApi(req, res, pathname, parsedUrl) {
                 200,
                 {
                     ...safe,
+                    allowPrivateNetworkProxy,
+                    privateNetworkProxyLocked: ENV_PRIVATE_NETWORK_PROXY_LOCKED,
                     hasAuthPassword: Boolean(authPassword),
                     envLocked: Boolean(ENV_AUTH_TOKEN)
                 },

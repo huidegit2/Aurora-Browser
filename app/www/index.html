@@ -172,6 +172,37 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  .tab-sleep-btn {
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: none;
+    border-radius: 50%;
+    background: transparent;
+    color: var(--text-muted);
+    font: 600 9px/1 system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    opacity: 0;
+    cursor: pointer;
+    transition: opacity 0.15s, background 0.15s, color 0.15s;
+  }
+  .tab-item:hover .tab-sleep-btn,
+  .tab-item:focus-within .tab-sleep-btn { opacity: 1; }
+  .tab-sleep-btn:hover:not(:disabled) {
+    background: rgba(128, 128, 128, 0.2);
+    color: var(--text-primary);
+  }
+  .tab-sleep-btn:disabled {
+    opacity: 0.35;
+    cursor: default;
+  }
+  .menu-item:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
 
   .tab-close {
     width: 18px;
@@ -1217,6 +1248,7 @@
     .new-tab-btn { width: 34px; height: 34px; }
     .tab-item { height: 34px; }
     .tab-close { width: 28px; height: 28px; }
+    .tab-sleep-btn { opacity: 1; width: 28px; height: 28px; }
     .side-close,
     .find-btn,
     .omnibox-lock,
@@ -1363,6 +1395,7 @@
   <div class="menu-popup" id="tabContextMenu" style="width:190px;z-index:220;">
     <button class="menu-item" data-tab-act="reload"><span>重新加载</span></button>
     <button class="menu-item" data-tab-act="duplicate"><span>复制标签页</span></button>
+    <button class="menu-item" data-tab-act="sleep"><span>休眠标签页</span></button>
     <div class="menu-sep"></div>
     <button class="menu-item" data-tab-act="close"><span>关闭标签页</span><span class="menu-key">Ctrl+W</span></button>
     <button class="menu-item" data-tab-act="close-others"><span>关闭其他标签页</span></button>
@@ -1430,6 +1463,16 @@
               <option value="dark">深色模式</option>
             </select>
           </div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+            <span style="font-size:12.5px;color:var(--text-muted);">后台标签页自动休眠</span>
+            <select id="tabSleepMinutesSelect" style="font-size:12.5px;padding:4px 10px;border-radius:6px;border:1px solid var(--border);background:var(--bg-input);color:var(--text);">
+              <option value="0">关闭</option>
+              <option value="15">15 分钟</option>
+              <option value="30">30 分钟</option>
+              <option value="60">60 分钟</option>
+            </select>
+          </div>
+          <div class="https-note" id="tabSleepStatus" style="font-size:11.5px;color:var(--text-muted);">休眠后会释放后台网页；切回时重新加载，未提交的内容可能丢失。也可点击标签上的休眠按钮或使用右键菜单。</div>
         </div>
 
         <div style="border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px;">
@@ -1439,6 +1482,11 @@
             <button type="button" class="btn" id="saveAuthPassBtn">保存</button>
           </div>
           <div class="https-note" id="authPassStatus" style="font-size:11.5px;color:var(--text-muted);">公网暴露时建议设置访问密码。</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:4px;">
+            <div style="font-size:12.5px;color:var(--text-muted);">允许通过 NAS 访问局域网网页与设备</div>
+            <button type="button" class="btn" id="privateNetworkProxyToggle" role="switch" aria-checked="false">已关闭</button>
+          </div>
+          <div class="https-note" id="privateNetworkProxyStatus" style="font-size:11.5px;color:var(--text-muted);">仅在可信网络启用；如对公网开放，请先设置访问密码。</div>
         </div>
 
         <div style="border:1px solid var(--border);border-radius:10px;padding:12px;display:flex;flex-direction:column;gap:8px;" id="menuHttps">
@@ -1617,9 +1665,10 @@ const state = {
   activeTabId: null,
   bookmarks: [],
   historyCache: [],
-  settings: { searchEngine: 'bing', theme: 'system' },
+  settings: { searchEngine: 'bing', theme: 'system', autoSleepMinutes: 0 },
   engineMode: 'lite',
   privateNetworkProxy: false,
+  privateNetworkProxyLocked: false,
   ui: { showBookmarksBar: true, sidebarOpen: false, sidebarPanel: 'history' },
   sj: { ready: false, controller: null, bootPromise: null, attempt: 0, keepaliveTimer: null },
   startup: { authenticated: false, issues: {}, promise: null },
@@ -1922,6 +1971,14 @@ function watchTabFrame(tab, pane, frame, sequence) {
   const onLoad = () => {
     if (!current()) return;
     finish();
+    if (tab.sleepScroll) {
+      const position = tab.sleepScroll;
+      tab.sleepScroll = null;
+      setTimeout(() => {
+        if (!current()) return;
+        try { frame.contentWindow.scrollTo(position.x, position.y); } catch {}
+      }, 0);
+    }
     installFramePopupGuards(frame);
     if (tab.kernel === 'lite') {
       try {
@@ -2160,6 +2217,90 @@ function syncZoomIndicators() {
 }
 
 // 标签页管理
+function clearTabSleepTimer(tab) {
+  if (!tab || !tab.sleepTimer) return;
+  clearTimeout(tab.sleepTimer);
+  tab.sleepTimer = null;
+}
+
+function tabHasActiveMedia(tab) {
+  const pane = document.getElementById(`pane-${tab.id}`);
+  const frame = pane && pane.querySelector('.proxy-frame');
+  if (!frame) return false;
+  try {
+    const doc = frame.contentDocument;
+    if (!doc || typeof doc.querySelectorAll !== 'function') return true;
+    return Array.from(doc.querySelectorAll('audio, video')).some((media) => !media.paused && !media.ended);
+  } catch {
+    return true;
+  }
+}
+
+function sleepTab(tabId, manual = false) {
+  const tab = state.tabs.find((item) => item.id === tabId);
+  if (!tab || tab.id === state.activeTabId || tab.url === 'fn://newtab' || tab.loading || tab.pendingNavigation || tab.sleeping) return false;
+  if (!manual && tabHasActiveMedia(tab)) return false;
+  const pane = document.getElementById(`pane-${tab.id}`);
+  const frame = pane && pane.querySelector('.proxy-frame');
+  if (!pane || !frame) return false;
+  try {
+    const win = frame.contentWindow;
+    if (win && Number.isFinite(win.scrollX) && Number.isFinite(win.scrollY)) {
+      tab.sleepScroll = { x: win.scrollX, y: win.scrollY };
+    }
+  } catch {}
+  clearTabSleepTimer(tab);
+  tab.sleepingUrl = tab.url;
+  tab.navigationSeq = (tab.navigationSeq || 0) + 1;
+  tab.loading = false;
+  tab.pendingNavigation = false;
+  tab.sleeping = true;
+  tab.kernel = 'sleeping';
+  disposeTabFrame(tab, pane);
+  pane.innerHTML = '<div class="tab-sleep-message" role="status" style="display:flex;align-items:center;justify-content:center;height:100%;color:var(--text-muted);font:14px/1.6 system-ui,sans-serif"><div><strong>标签页已休眠</strong><p>切换到此标签即可恢复</p></div></div>';
+  renderTabStrip();
+  updateEngineBadge();
+  return true;
+}
+
+function wakeTab(tabId) {
+  const tab = state.tabs.find((item) => item.id === tabId);
+  if (!tab || !tab.sleeping) return false;
+  const targetUrl = tab.sleepingUrl || tab.url;
+  tab.sleeping = false;
+  tab.sleepingUrl = null;
+  tab.kernel = null;
+  navigateTab(tab.id, targetUrl, true);
+  return true;
+}
+
+function toggleTabSleep(tabId) {
+  const tab = state.tabs.find((item) => item.id === tabId);
+  if (!tab) return false;
+  if (tab.sleeping) {
+    switchTab(tab.id);
+    return true;
+  }
+  return sleepTab(tab.id, true);
+}
+
+function scheduleBackgroundTabSleep(tab) {
+  if (!tab || tab.id === state.activeTabId || tab.sleeping || tab.loading || tab.pendingNavigation || tab.url === 'fn://newtab' || tab.sleepTimer) return;
+  const minutes = Number(state.settings.autoSleepMinutes) || 0;
+  if (minutes <= 0) return;
+  tab.sleepTimer = setTimeout(() => {
+    tab.sleepTimer = null;
+    sleepTab(tab.id, false);
+  }, minutes * 60 * 1000);
+}
+
+function refreshBackgroundTabSleepTimers() {
+  state.tabs.forEach((tab) => clearTabSleepTimer(tab));
+  state.tabs.forEach((tab) => {
+    if (tab.id !== state.activeTabId) scheduleBackgroundTabSleep(tab);
+  });
+}
+
 function createTab(initialUrl = 'fn://newtab') {
   if (!state.startup.authenticated) return null;
   const id = 'tab-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6);
@@ -2201,6 +2342,7 @@ function closeTab(id, e) {
   if (idx === -1) return;
 
   const closing = state.tabs[idx];
+  clearTabSleepTimer(closing);
   if (closing.url && closing.url !== 'fn://newtab') {
     closedTabUrls.push(closing.url);
     if (closedTabUrls.length > 20) closedTabUrls.shift();
@@ -2224,12 +2366,18 @@ function closeTab(id, e) {
 }
 
 function switchTab(id) {
+  const tab = state.tabs.find((item) => item.id === id);
+  if (!tab) return;
   state.activeTabId = id;
+  state.tabs.forEach((candidate) => {
+    if (candidate.id === id) clearTabSleepTimer(candidate);
+    else scheduleBackgroundTabSleep(candidate);
+  });
   document.querySelectorAll('.tab-pane').forEach((el) => {
     el.classList.toggle('active', el.id === `pane-${id}`);
   });
-  const tab = getActiveTab();
-  if (tab) applyZoom(tab);
+  if (tab.sleeping) wakeTab(tab.id);
+  applyZoom(tab);
   renderTabStrip();
   syncToolbarWithActiveTab();
   syncZoomIndicators();
@@ -2246,6 +2394,9 @@ async function navigateTab(id, rawInput, skipHistoryPush = false) {
   const tab = state.tabs.find((t) => t.id === id);
   const pane = document.getElementById(`pane-${id}`);
   if (!tab || !pane) return;
+  clearTabSleepTimer(tab);
+  tab.sleeping = false;
+  tab.sleepingUrl = null;
   const sequence = (tab.navigationSeq || 0) + 1;
   tab.navigationSeq = sequence;
   tab.pendingNavigation = true;
@@ -2264,8 +2415,8 @@ async function navigateTab(id, rawInput, skipHistoryPush = false) {
     disposeTabFrame(tab, pane);
     tab.kernel = 'blocked';
     tab.pendingNavigation = false;
-    tab.loadError = '局域网地址访问默认关闭。确认网络可信后，设置 ALLOW_PRIVATE_NETWORK_PROXY=1 并重启应用。';
-    pane.innerHTML = '<div role="status" style="margin:24px auto;max-width:560px;padding:20px;color:var(--text);font:14px/1.6 system-ui,sans-serif"><strong>局域网访问已阻止</strong><p>为保护 NAS 内部服务，Aurora 默认不会代理访问局域网地址。</p><p>若这是你信任的网络，可在应用启动环境设置 ALLOW_PRIVATE_NETWORK_PROXY=1 并重启。</p></div>';
+    tab.loadError = '局域网访问已关闭，可在设置中开启后重试。';
+    pane.innerHTML = '<div role="status" style="margin:24px auto;max-width:560px;padding:20px;color:var(--text);font:14px/1.6 system-ui,sans-serif"><strong>局域网访问已关闭</strong><p>为保护 NAS 内部服务，Aurora 当前不会代理访问局域网地址。</p><p>如确认网络可信，可在“设置 → 安全与访问控制”中开启“允许访问内网”。</p></div>';
     showLoading(false, id, sequence);
     renderTabStrip();
     if (id === state.activeTabId) syncToolbarWithActiveTab();
@@ -2352,6 +2503,7 @@ function showLoading(active, tabId = state.activeTabId, sequence) {
     tab.loading = nextLoading;
     renderTabStrip();
   }
+  if (!nextLoading && tab.id !== state.activeTabId) scheduleBackgroundTabSleep(tab);
   if (tabId === state.activeTabId) syncLoadingIndicator();
 }
 
@@ -2403,9 +2555,16 @@ function renderTabStrip() {
     el.innerHTML = `
       <span class="tab-fav">${tabFavHtml(tab)}</span>
       <span class="tab-title">${escapeHtml(tab.title)}</span>
+      ${tab.url !== 'fn://newtab' ? `<button type="button" class="tab-sleep-btn" title="${tab.sleeping ? '点击恢复标签页' : tab.id === state.activeTabId ? '当前标签页无法休眠' : '休眠标签页'}" aria-label="${tab.sleeping ? '恢复标签页' : '休眠标签页'}" ${tab.id === state.activeTabId && !tab.sleeping ? 'disabled' : ''}>${tab.sleeping ? '↻' : 'Zz'}</button>` : ''}
       <button class="tab-close" title="关闭 (Ctrl+W)">×</button>
     `;
     el.addEventListener('click', () => switchTab(tab.id));
+    const sleepButton = el.querySelector('.tab-sleep-btn');
+    if (sleepButton) sleepButton.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      toggleTabSleep(tab.id);
+    });
     el.addEventListener('contextmenu', (e) => {
       e.preventDefault();
       e.stopPropagation();
@@ -3192,9 +3351,78 @@ function openSettingsModal() {
   if (menuSe) menuSe.value = state.settings.searchEngine || 'bing';
   const themeSel = document.getElementById('settingsThemeSelect');
   if (themeSel) themeSel.value = state.settings.theme || 'system';
+  const sleepSel = document.getElementById('tabSleepMinutesSelect');
+  if (sleepSel) sleepSel.value = String(Number(state.settings.autoSleepMinutes) || 0);
+  updatePrivateNetworkProxyControl();
   updateAuthPassStatus();
   updateHttpsSection();
   modal.classList.add('open');
+}
+
+function updatePrivateNetworkProxyControl() {
+  const button = document.getElementById('privateNetworkProxyToggle');
+  const status = document.getElementById('privateNetworkProxyStatus');
+  if (button) {
+    button.textContent = state.privateNetworkProxy ? '已开启' : '已关闭';
+    button.setAttribute('aria-checked', String(state.privateNetworkProxy));
+    button.disabled = Boolean(state.privateNetworkProxyLocked);
+  }
+  if (status) {
+    status.textContent = state.privateNetworkProxyLocked
+      ? '此选项由服务端环境变量固定，无法在界面修改。'
+      : state.privateNetworkProxy
+        ? '已开启。NAS 将代理访问局域网目标；仅在可信网络使用。'
+        : '已关闭。仅在可信网络启用；如对公网开放，请先设置访问密码。';
+  }
+}
+
+async function togglePrivateNetworkProxy() {
+  if (state.privateNetworkProxyLocked) return;
+  const button = document.getElementById('privateNetworkProxyToggle');
+  const status = document.getElementById('privateNetworkProxyStatus');
+  const next = !state.privateNetworkProxy;
+  if (button) { button.disabled = true; button.textContent = '正在应用…'; }
+  try {
+    const data = await fetchJson('/api/settings', {
+      method: 'PUT',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ allowPrivateNetworkProxy: next })
+    });
+    state.privateNetworkProxy = data.allowPrivateNetworkProxy === true;
+    state.privateNetworkProxyLocked = data.privateNetworkProxyLocked === true;
+    state.settings = { ...state.settings, ...data };
+    updatePrivateNetworkProxyControl();
+    const retryTabs = state.tabs.filter((tab) => isIntranetUrl(tab.url) &&
+      ((state.privateNetworkProxy && tab.kernel === 'blocked') || (!state.privateNetworkProxy && tab.kernel !== 'blocked')));
+    retryTabs.forEach((tab) => navigateTab(tab.id, tab.url, true));
+  } catch (err) {
+    if (button) button.disabled = Boolean(state.privateNetworkProxyLocked);
+    if (status) status.textContent = '保存失败，请检查连接后重试。';
+  }
+}
+
+async function setTabSleepMinutes(value) {
+  const next = Number(value);
+  if (![0, 15, 30, 60].includes(next)) return;
+  const previous = Number(state.settings.autoSleepMinutes) || 0;
+  const select = document.getElementById('tabSleepMinutesSelect');
+  const status = document.getElementById('tabSleepStatus');
+  state.settings.autoSleepMinutes = next;
+  refreshBackgroundTabSleepTimers();
+  try {
+    const data = await fetchJson('/api/settings', {
+      method: 'PUT',
+      headers: authHeaders({ 'Content-Type': 'application/json' }),
+      body: JSON.stringify({ autoSleepMinutes: next })
+    });
+    state.settings = { ...state.settings, ...data };
+    if (status) status.textContent = next ? `后台标签页将在 ${next} 分钟空闲后休眠。` : '自动休眠已关闭，可点击标签上的按钮或使用右键菜单手动休眠。';
+  } catch (err) {
+    state.settings.autoSleepMinutes = previous;
+    refreshBackgroundTabSleepTimers();
+    if (select) select.value = String(previous);
+    if (status) status.textContent = '保存失败，已恢复上一次设置。';
+  }
 }
 
 function closeSettingsModal() {
@@ -3206,6 +3434,8 @@ document.getElementById('settingsCloseBtn').onclick = closeSettingsModal;
 document.getElementById('settingsOkBtn').onclick = closeSettingsModal;
 document.getElementById('saveAuthPassBtn').onclick = saveAuthPass;
 document.getElementById('saveCertNamesBtn').onclick = saveCertNames;
+document.getElementById('privateNetworkProxyToggle').onclick = togglePrivateNetworkProxy;
+document.getElementById('tabSleepMinutesSelect').addEventListener('change', (e) => setTabSleepMinutes(e.target.value));
 document.getElementById('settingsDiagBtn').onclick = () => {
   closeSettingsModal();
   openDiagnosticsModal();
@@ -3278,8 +3508,15 @@ function openTabContextMenu(tabId, x, y) {
   ctxTabId = tabId;
   const menu = document.getElementById('tabContextMenu');
   if (!menu) return;
-  menu.style.left = `${Math.min(x, window.innerWidth - 200)}px`;
-  menu.style.top = `${Math.min(y, window.innerHeight - 220)}px`;
+  const tab = state.tabs.find((item) => item.id === tabId);
+  const sleepAction = menu.querySelector('[data-tab-act="sleep"]');
+  if (sleepAction && tab) {
+    sleepAction.disabled = tab.id === state.activeTabId && !tab.sleeping;
+    const label = sleepAction.querySelector('span');
+    if (label) label.textContent = tab.sleeping ? '恢复标签页' : '休眠标签页';
+  }
+  menu.style.left = `${Math.max(8, Math.min(x, window.innerWidth - (menu.offsetWidth || 200)))}px`;
+  menu.style.top = `${Math.max(8, Math.min(y, window.innerHeight - (menu.offsetHeight || 250)))}px`;
   menu.style.right = 'auto';
   menu.classList.add('open');
 }
@@ -3298,6 +3535,7 @@ document.getElementById('tabContextMenu').addEventListener('click', (e) => {
   if (!tab && act !== 'reopen') return;
   if (act === 'reload') navigateTab(tab.id, tab.url, true);
   else if (act === 'duplicate') createTab(tab.url);
+  else if (act === 'sleep') toggleTabSleep(tab.id);
   else if (act === 'close') closeTab(tab.id);
   else if (act === 'close-others') {
     state.tabs.filter((t) => t.id !== tab.id).forEach((t) => closeTab(t.id));
@@ -3902,6 +4140,8 @@ async function loadStartupStatus() {
   if (!status || typeof status !== 'object' || Array.isArray(status)) throw new Error('内核状态无效');
   state.engineMode = status.engine || 'lite';
   state.privateNetworkProxy = status.privateNetworkProxy === true;
+  state.privateNetworkProxyLocked = status.privateNetworkProxyLocked === true;
+  updatePrivateNetworkProxyControl();
   if (status.https) {
     state.https = {
       enabled: !!status.https.enabled,
@@ -3929,7 +4169,12 @@ async function loadStartupSettings() {
   const settings = await fetchJson('/api/settings', { headers: authHeaders() });
   if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error('设置数据无效');
   state.settings = { ...state.settings, ...settings };
+  if (typeof settings.allowPrivateNetworkProxy === 'boolean') state.privateNetworkProxy = settings.allowPrivateNetworkProxy;
+  if (typeof settings.privateNetworkProxyLocked === 'boolean') state.privateNetworkProxyLocked = settings.privateNetworkProxyLocked;
   if (typeof settings.showBookmarksBar === 'boolean') state.ui.showBookmarksBar = settings.showBookmarksBar;
+  const sleepSelect = document.getElementById('tabSleepMinutesSelect');
+  if (sleepSelect) sleepSelect.value = String(Number(state.settings.autoSleepMinutes) || 0);
+  updatePrivateNetworkProxyControl();
   applyTheme(state.settings.theme || 'system');
   renderBookmarkBar();
   refreshNewTabPages();

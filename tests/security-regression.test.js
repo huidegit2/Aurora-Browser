@@ -138,6 +138,15 @@ test('API status reports private-network proxy policy and lite proxy blocks priv
     const status = await request(origin + '/api/status', { headers: { origin } });
     assert.equal(status.status, 200);
     assert.equal(JSON.parse(status.body).privateNetworkProxy, false);
+    assert.equal(JSON.parse(status.body).privateNetworkProxyLocked, true);
+
+    const settings = await request(origin + '/api/settings', { headers: { origin } });
+    assert.equal(JSON.parse(settings.body).privateNetworkProxyLocked, true);
+    const locked = await request(origin + '/api/settings', {
+        method: 'PUT', headers: { origin, 'content-type': 'application/json' },
+        body: JSON.stringify({ allowPrivateNetworkProxy: true })
+    });
+    assert.equal(locked.status, 400);
 
     const upstream = http.createServer((_req, res) => res.end('must not be reached'));
     const target = await listen(upstream);
@@ -145,7 +154,7 @@ test('API status reports private-network proxy policy and lite proxy blocks priv
     const encoded = Buffer.from(target, 'utf8').toString('base64url');
     const blocked = await request(origin + '/lite-proxy/' + encoded);
     assert.equal(blocked.status, 403);
-    assert.match(blocked.body, /局域网目标访问默认关闭/);
+    assert.match(blocked.body, /局域网目标访问已关闭/);
 });
 
 test('explicit private-network proxy opt-in is reflected by the authenticated status endpoint', async t => {
@@ -164,6 +173,37 @@ test('explicit private-network proxy opt-in is reflected by the authenticated st
     const proxied = await request(origin + '/lite-proxy/' + encoded);
     assert.equal(proxied.status, 200);
     assert.equal(proxied.body, 'private target allowed by explicit opt-in');
+});
+
+test('private-network proxy setting can be toggled live from the settings API', async t => {
+    const app = loadApp(t);
+    const server = http.createServer(app.requestHandler);
+    const origin = await listen(server);
+    t.after(() => close(server));
+    const upstream = http.createServer((_req, res) => res.end('private page'));
+    const target = await listen(upstream);
+    t.after(() => close(upstream));
+    const encoded = Buffer.from(target, 'utf8').toString('base64url');
+    const blocked = await request(origin + '/lite-proxy/' + encoded);
+    assert.equal(blocked.status, 403);
+
+    const enabled = await request(origin + '/api/settings', {
+        method: 'PUT', headers: { origin, 'content-type': 'application/json' },
+        body: JSON.stringify({ allowPrivateNetworkProxy: true })
+    });
+    assert.equal(enabled.status, 200);
+    assert.equal(JSON.parse(enabled.body).allowPrivateNetworkProxy, true);
+    const allowed = await request(origin + '/lite-proxy/' + encoded);
+    assert.equal(allowed.status, 200);
+    assert.equal(allowed.body, 'private page');
+
+    const disabled = await request(origin + '/api/settings', {
+        method: 'PUT', headers: { origin, 'content-type': 'application/json' },
+        body: JSON.stringify({ allowPrivateNetworkProxy: false })
+    });
+    assert.equal(disabled.status, 200);
+    const deniedAgain = await request(origin + '/lite-proxy/' + encoded);
+    assert.equal(deniedAgain.status, 403);
 });
 
 test('real API handler denies sandbox/foreign calls and accepts authenticated same-origin calls', async t => {

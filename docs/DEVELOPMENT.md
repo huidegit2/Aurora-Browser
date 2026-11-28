@@ -41,7 +41,7 @@ http://localhost:18920
 | `HTTPS_PORT` | HTTPS 端口，默认 `18921` |
 | `DATA_DIR` | 数据目录；直接运行源码时默认是项目根目录下的 `data/`，FPK 生命周期会传入 fnOS 应用数据位置 |
 | `AUTH_TOKEN` | 环境变量访问口令，优先于界面中保存的密码 |
-| `ALLOW_PRIVATE_NETWORK_PROXY` | 默认关闭；设为 `1` 后允许代理访问内网目标，需重启应用 |
+| `ALLOW_PRIVATE_NETWORK_PROXY` | 可选覆盖 Aurora 设置中的内网访问开关；设为 `1` 强制开启、设为 `0` 强制关闭并锁定界面，未设置时使用已保存设置 |
 | `TLS_CERT_PATH` / `TLS_KEY_PATH` | 自定义入口证书链与私钥路径 |
 | `NODE_EXTRA_CA_CERTS` | Node 进程启动时额外信任的 CA 文件，不能代替客户端入口证书信任 |
 
