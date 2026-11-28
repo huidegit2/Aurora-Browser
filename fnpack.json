@@ -223,6 +223,22 @@
               "size": 44025056
             }
           }
+        },
+        "1.0.27": {
+          "changelog": "极光浏览器 Aurora v1.0.27\n\n- feat: polish Aurora UI and connection diagnostics (5723594)\n- chore: update fnpack.json for v1.0.26 [skip ci] (cffbc86)",
+          "updated_at": "2026-11-28T04:21:30+00:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.27/fn-browser-arm64.fpk",
+              "sha256": "d58eabef54fa6af574d0152266711eea5def1f9fb98f07e1a313a022e8a5af40",
+              "size": 43989792
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.27/fn-browser-x86_64.fpk",
+              "sha256": "bfb81ed1b85a3a9fb31ee53ce2fab9ce7f8c36d5bb8f204f9026287ac0d02a1f",
+              "size": 44027653
+            }
+          }
         }
       }
     }
