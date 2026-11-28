@@ -506,6 +506,22 @@ test('script loading is bounded, cleans failed nodes and caches only successful 
   assert.equal(h.scripts.length, 2);
 });
 
+test('private targets remain blocked by the UI until the server explicitly enables them', async () => {
+  const h = harness();
+  const { tab, pane } = h.addTab('a');
+  assert.equal(h.context.canUseScramjet('http://192.168.1.1/'), false);
+  h.state.sj.ready = true;
+  h.state.sj.controller = {};
+  assert.equal(h.context.canUseScramjet('https://example.com/'), true);
+  await h.context.navigateTab('a', 'http://192.168.1.1/');
+  assert.equal(tab.kernel, 'blocked');
+  assert.match(pane.innerHTML, /局域网访问已阻止/);
+  assert.equal(h.requests.length, 0);
+  h.state.privateNetworkProxy = true;
+  assert.equal(h.context.canUseScramjet('http://192.168.1.1/'), true);
+  assert.equal(h.context.canUseScramjet('https://192.168.1.1/'), false);
+});
+
 test('Scramjet has bounded activation and controller waits and a failed boot is retryable', async () => {
   for (const stall of ['ready', 'controller']) {
     const h = harness();
@@ -745,6 +761,7 @@ test('Scramjet 0.1.0 frames registry stays bounded without destroy across naviga
   assert.deepEqual(registry, [frameB]);
   await h.context.navigateTab('a', 'https://a.test/again');
   assert.equal(registry.length, 2);
+  h.state.privateNetworkProxy = true;
   await h.context.navigateTab('a', 'https://192.168.1.1/');
   assert.equal(a.kernel, 'lite');
   assert.deepEqual(registry, [frameB]);

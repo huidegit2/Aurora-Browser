@@ -8,6 +8,7 @@ const { URL } = require('url');
 const { readJson, writeJson } = require('./storage');
 const { createTlsManager } = require('./tls');
 const { createLiteProxy } = require('./lite-proxy');
+const { configureWispPrivateNetwork, resolveTargetAddresses } = require('./network-policy');
 const { isTrustedBrowserRequest, safeCookieValue } = require('./request-security');
 
 const APP_VERSION = (() => {
@@ -22,6 +23,7 @@ const APP_VERSION = (() => {
 
 const ENV_AUTH_TOKEN = process.env.AUTH_TOKEN || '';
 const TOKEN_PARAM = '_aurora_token';
+const ALLOW_PRIVATE_NETWORK_PROXY = process.env.ALLOW_PRIVATE_NETWORK_PROXY === '1';
 const SESSION_COOKIE_NAME = 'aurora_session';
 let activeAuthToken = ENV_AUTH_TOKEN;
 
@@ -113,7 +115,11 @@ const tlsManager = createTlsManager({
     readJson
 });
 
-const handleLiteProxy = createLiteProxy({ tokenParam: TOKEN_PARAM });
+const handleLiteProxy = createLiteProxy({
+    tokenParam: TOKEN_PARAM,
+    allowPrivateNetworkProxy: ALLOW_PRIVATE_NETWORK_PROXY,
+    resolveTarget: resolveTargetAddresses
+});
 
 // ---------------------------------------------------------------------------
 // 2. 加载代理内核：Scramjet（Mercury Workshop）+ Wisp 服务端
@@ -137,9 +143,7 @@ try {
         '/utils/': utilsDir,
         '/epoxy/': epoxyDir
     };
-    if (wispServer.options) {
-        wispServer.options.allow_private_ips = true;
-    }
+    configureWispPrivateNetwork(wispServer, ALLOW_PRIVATE_NETWORK_PROXY);
     wispRouteRequest = wispServer.routeRequest.bind(wispServer);
     engineMode = 'scramjet';
     console.log('[fn-browser] Scramjet + Wisp 内核已就绪');
@@ -276,6 +280,7 @@ async function handleApi(req, res, pathname, parsedUrl) {
         return sendJson(res, 200, {
             ok: true,
             engine: engineMode,
+            privateNetworkProxy: ALLOW_PRIVATE_NETWORK_PROXY,
             https: { enabled: hs.enabled, port: hs.port, mode: hs.mode },
             version: APP_VERSION,
             uptime: Math.floor(process.uptime()),

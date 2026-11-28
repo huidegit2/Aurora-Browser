@@ -1,5 +1,6 @@
 const http = require('http');
 const https = require('https');
+const { resolveTargetAddresses } = require('./network-policy');
 const { URL } = require('url');
 
 function encodeLiteTarget(targetUrl) {
@@ -78,8 +79,8 @@ function rewriteHtmlForLiteProxy(html, baseUrl) {
 
 const LITE_SANDBOX = 'sandbox allow-scripts allow-forms allow-downloads';
 
-function createLiteProxy({ tokenParam, timeoutMs = 20000, maxHtmlBytes = 8 * 1024 * 1024 }) {
-    return function handleLiteProxy(req, res, encodedPart, extraSearch) {
+function createLiteProxy({ tokenParam, timeoutMs = 20000, dnsTimeoutMs = 5000, maxHtmlBytes = 8 * 1024 * 1024, allowPrivateNetworkProxy = false, resolveTarget = resolveTargetAddresses }) {
+    return async function handleLiteProxy(req, res, encodedPart, extraSearch) {
         // Response-level sandbox also protects a directly opened proxy URL.
         // Omitting allow-same-origin separates page scripts from our management UI.
         res.setHeader('Content-Security-Policy', LITE_SANDBOX);
@@ -109,6 +110,28 @@ function createLiteProxy({ tokenParam, timeoutMs = 20000, maxHtmlBytes = 8 * 102
             res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
             return res.end('Unsupported target protocol');
         }
+
+        let targetResolution;
+        let dnsTimer;
+        try {
+            targetResolution = await Promise.race([
+                resolveTarget(parsed.hostname, { allowPrivateNetworkProxy }),
+                new Promise((_, reject) => {
+                    dnsTimer = setTimeout(() => reject(Object.assign(new Error('目标域名解析超时'), { code: 'TARGET_DNS_TIMEOUT' })), dnsTimeoutMs);
+                })
+            ]);
+        } catch (err) {
+            const privateTarget = err && err.code === 'PRIVATE_NETWORK_DISABLED';
+            const timedOut = err && err.code === 'TARGET_DNS_TIMEOUT';
+            res.writeHead(privateTarget ? 403 : timedOut ? 504 : 502, { 'Content-Type': 'text/plain; charset=utf-8' });
+            return res.end(privateTarget
+                ? '局域网目标访问默认关闭。确认网络可信后，可设置 ALLOW_PRIVATE_NETWORK_PROXY=1 并重启应用。'
+                : timedOut ? '目标域名解析超时，请检查 DNS 或稍后重试。'
+                    : '目标域名解析失败，请检查地址或 DNS。');
+        } finally {
+            clearTimeout(dnsTimer);
+        }
+        if (req.aborted || res.destroyed) return;
 
         const client = parsed.protocol === 'https:' ? https : http;
         const headers = { ...req.headers };
@@ -149,6 +172,7 @@ function createLiteProxy({ tokenParam, timeoutMs = 20000, maxHtmlBytes = 8 * 102
                 path: parsed.pathname + parsed.search,
                 method: req.method,
                 headers,
+                lookup: targetResolution.lookup,
                 timeout: timeoutMs
             },
             (proxyRes) => {

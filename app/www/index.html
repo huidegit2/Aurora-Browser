@@ -1619,6 +1619,7 @@ const state = {
   historyCache: [],
   settings: { searchEngine: 'bing', theme: 'system' },
   engineMode: 'lite',
+  privateNetworkProxy: false,
   ui: { showBookmarksBar: true, sidebarOpen: false, sidebarPanel: 'history' },
   sj: { ready: false, controller: null, bootPromise: null, attempt: 0, keepaliveTimer: null },
   startup: { authenticated: false, issues: {}, promise: null },
@@ -1683,8 +1684,13 @@ function faviconUrlFor(targetUrl) {
 // 判断是否为内网地址（内网设备始终走轻量直连，Scramjet 的 Wisp 服务端默认也拒绝私网目标）
 function isIntranetUrl(targetUrl) {
   try {
-    const host = new URL(targetUrl).hostname.toLowerCase();
-    if (host === 'localhost' || host === '::1' || host.endsWith('.local')) return true;
+    const host = new URL(targetUrl).hostname.toLowerCase().replace(/^\[|\]$/g, '').split('%')[0];
+    if (host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) return true;
+    if (host.includes(':')) {
+      if (host === '::' || host === '::1' || /^f[cd]/i.test(host) || /^fe[89ab]/i.test(host) || /^ff/i.test(host)) return true;
+      const mapped = host.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/i);
+      if (mapped) return isIntranetUrl(`http://${mapped[1]}`);
+    }
     const m = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/);
     if (m) {
       const a = parseInt(m[1], 10);
@@ -1702,9 +1708,9 @@ function isIntranetUrl(targetUrl) {
 
 function canUseScramjet(targetUrl) {
   if (!state.sj.ready || !state.sj.controller) return false;
-  // http:// 内网设备（如 192.168.1.1 路由器/爱快）走 Scramjet 满血内核以支持 JS/Cookie；
-  // https:// 内网设备继续走轻量直连；自签名目标需配置信任，不再跳过证书校验
-  return !isIntranetUrl(targetUrl) || /^http:\/\//i.test(targetUrl);
+  // 内网目标只有在服务端显式启用局域网代理后才进入代理路径。
+  if (isIntranetUrl(targetUrl)) return state.privateNetworkProxy && /^http:\/\//i.test(targetUrl);
+  return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -1715,6 +1721,7 @@ function kernelLabelForActiveTab() {
   const tab = getActiveTab();
   if (tab && tab.kernel === 'scramjet') return 'Scramjet 内核';
   if (tab && tab.kernel === 'lite') return '轻量直连内核';
+  if (tab && tab.kernel === 'blocked') return '局域网访问已阻止';
   if (state.sj.ready) return 'Scramjet 内核';
   if (state.engineMode === 'scramjet') return 'Scramjet 内核启动中…';
   return '轻量直连内核';
@@ -2251,6 +2258,19 @@ async function navigateTab(id, rawInput, skipHistoryPush = false) {
     tab.history = tab.history.slice(0, tab.historyIndex + 1);
     tab.history.push(targetUrl);
     tab.historyIndex = tab.history.length - 1;
+  }
+
+  if (isIntranetUrl(targetUrl) && !state.privateNetworkProxy) {
+    disposeTabFrame(tab, pane);
+    tab.kernel = 'blocked';
+    tab.pendingNavigation = false;
+    tab.loadError = '局域网地址访问默认关闭。确认网络可信后，设置 ALLOW_PRIVATE_NETWORK_PROXY=1 并重启应用。';
+    pane.innerHTML = '<div role="status" style="margin:24px auto;max-width:560px;padding:20px;color:var(--text);font:14px/1.6 system-ui,sans-serif"><strong>局域网访问已阻止</strong><p>为保护 NAS 内部服务，Aurora 默认不会代理访问局域网地址。</p><p>若这是你信任的网络，可在应用启动环境设置 ALLOW_PRIVATE_NETWORK_PROXY=1 并重启。</p></div>';
+    showLoading(false, id, sequence);
+    renderTabStrip();
+    if (id === state.activeTabId) syncToolbarWithActiveTab();
+    updateEngineBadge();
+    return;
   }
 
   if (targetUrl === 'fn://newtab') {
@@ -3881,6 +3901,7 @@ async function loadStartupStatus() {
   const status = await fetchJson('/api/status', { headers: authHeaders() });
   if (!status || typeof status !== 'object' || Array.isArray(status)) throw new Error('内核状态无效');
   state.engineMode = status.engine || 'lite';
+  state.privateNetworkProxy = status.privateNetworkProxy === true;
   if (status.https) {
     state.https = {
       enabled: !!status.https.enabled,

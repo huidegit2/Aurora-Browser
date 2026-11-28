@@ -8,6 +8,7 @@ const http = require('node:http');
 const { createRequire } = require('node:module');
 const { isTrustedBrowserRequest, safeCookieValue } = require('../app/server/request-security');
 const { createLiteProxy } = require('../app/server/lite-proxy');
+const { configureWispPrivateNetwork, isNonPublicAddress, resolveTargetAddresses } = require('../app/server/network-policy');
 
 const browserRequest = (headers = {}, encrypted = false) => ({
     headers: { host: 'nas.local:18920', ...headers }, socket: { encrypted }
@@ -28,6 +29,43 @@ test('reverse proxy respects preserved Host/protocol and ignores forged forwarde
     assert.equal(isTrustedBrowserRequest(browserRequest({ host: 'aurora.example', 'x-forwarded-proto': 'https', origin: 'https://aurora.example' })), true);
     assert.equal(isTrustedBrowserRequest(browserRequest({ 'x-forwarded-host': 'evil.test', origin: 'http://evil.test' })), false);
     assert.equal(isTrustedBrowserRequest(browserRequest({ host: 'nas.local/evil' })), false);
+});
+
+test('private target classification rejects special IPv4/IPv6 ranges and mapped private IPv4', () => {
+    for (const address of ['127.0.0.1', '10.0.0.1', '172.16.0.1', '192.168.1.1', '169.254.1.1', '100.64.0.1', '::', '::1', 'fc00::1', 'fd00::1', 'fe80::1', 'ff02::1', '::ffff:192.168.1.1', '2001:db8::1']) {
+        assert.equal(isNonPublicAddress(address), true, address);
+    }
+    for (const address of ['8.8.8.8', '93.184.216.34', '2606:4700:4700::1111']) {
+        assert.equal(isNonPublicAddress(address), false, address);
+    }
+});
+
+test('target DNS results are checked and the selected addresses are pinned for connection', async () => {
+    await assert.rejects(
+        resolveTargetAddresses('mixed.example', { lookup: async () => [
+            { address: '93.184.216.34', family: 4 }, { address: '10.0.0.8', family: 4 }
+        ] }),
+        { code: 'PRIVATE_NETWORK_DISABLED' }
+    );
+    const resolved = await resolveTargetAddresses('public.example', {
+        lookup: async () => [{ address: '93.184.216.34', family: 4 }]
+    });
+    const pinned = await new Promise((resolve, reject) => resolved.lookup('public.example', { all: true }, (error, addresses) => error ? reject(error) : resolve(addresses)));
+    assert.deepEqual(pinned, [{ address: '93.184.216.34', family: 4 }]);
+    const explicitlyAllowed = await resolveTargetAddresses('router.local', {
+        allowPrivateNetworkProxy: true,
+        lookup: async () => [{ address: '192.168.1.1', family: 4 }]
+    });
+    assert.equal(explicitlyAllowed.addresses[0].address, '192.168.1.1');
+});
+
+test('Wisp private-network access follows explicit configuration and fails closed when unsupported', () => {
+    const server = { options: { allow_private_ips: true } };
+    configureWispPrivateNetwork(server, false);
+    assert.equal(server.options.allow_private_ips, false);
+    configureWispPrivateNetwork(server, true);
+    assert.equal(server.options.allow_private_ips, true);
+    assert.throws(() => configureWispPrivateNetwork({}, false), /不支持局域网目标访问策略/);
 });
 
 test('WebSocket origin is mandatory and malformed cookies fail closed without throwing', () => {
@@ -83,7 +121,7 @@ function loadApp(t, auth = '', options = {}) {
             if (name.startsWith('@mercuryworkshop/')) throw new Error('optional engine omitted in handler tests');
             return nativeRequire(name);
         },
-        process: { ...process, env: { DATA_DIR: fixture, HOST: '127.0.0.1', PORT: '0', HTTPS_PORT: '0', AUTH_TOKEN: auth } },
+        process: { ...process, env: { ...process.env, ...(options.env || {}), DATA_DIR: fixture, HOST: '127.0.0.1', PORT: '0', HTTPS_PORT: '0', AUTH_TOKEN: auth, ALLOW_PRIVATE_NETWORK_PROXY: (options.env && options.env.ALLOW_PRIVATE_NETWORK_PROXY) || '' } },
         __dirname: path.dirname(filename), Buffer, URL, URLSearchParams, setTimeout, clearTimeout,
         console: { log() {}, error() {} }
     };
@@ -91,6 +129,42 @@ function loadApp(t, auth = '', options = {}) {
     const handlers = vm.runInContext(fs.readFileSync(filename, 'utf8') + '\n;({requestHandler, upgradeHandler});', context, { filename });
     return { ...handlers, context, fixture };
 }
+
+test('API status reports private-network proxy policy and lite proxy blocks private targets by default', async t => {
+    const app = loadApp(t, '', { env: { ALLOW_PRIVATE_NETWORK_PROXY: '0' } });
+    const server = http.createServer(app.requestHandler);
+    const origin = await listen(server);
+    t.after(() => close(server));
+    const status = await request(origin + '/api/status', { headers: { origin } });
+    assert.equal(status.status, 200);
+    assert.equal(JSON.parse(status.body).privateNetworkProxy, false);
+
+    const upstream = http.createServer((_req, res) => res.end('must not be reached'));
+    const target = await listen(upstream);
+    t.after(() => close(upstream));
+    const encoded = Buffer.from(target, 'utf8').toString('base64url');
+    const blocked = await request(origin + '/lite-proxy/' + encoded);
+    assert.equal(blocked.status, 403);
+    assert.match(blocked.body, /局域网目标访问默认关闭/);
+});
+
+test('explicit private-network proxy opt-in is reflected by the authenticated status endpoint', async t => {
+    const app = loadApp(t, '', { env: { ALLOW_PRIVATE_NETWORK_PROXY: '1' } });
+    const server = http.createServer(app.requestHandler);
+    const origin = await listen(server);
+    t.after(() => close(server));
+    const status = await request(origin + '/api/status', { headers: { origin } });
+    assert.equal(status.status, 200);
+    assert.equal(JSON.parse(status.body).privateNetworkProxy, true);
+
+    const upstream = http.createServer((_req, res) => res.end('private target allowed by explicit opt-in'));
+    const target = await listen(upstream);
+    t.after(() => close(upstream));
+    const encoded = Buffer.from(target, 'utf8').toString('base64url');
+    const proxied = await request(origin + '/lite-proxy/' + encoded);
+    assert.equal(proxied.status, 200);
+    assert.equal(proxied.body, 'private target allowed by explicit opt-in');
+});
 
 test('real API handler denies sandbox/foreign calls and accepts authenticated same-origin calls', async t => {
     const app = loadApp(t, 'fixture-pass');
@@ -230,7 +304,7 @@ test('real WebSocket handler checks origin before invoking Wisp transport', t =>
 async function withProxy(t, upstreamHandler, options = {}) {
     const upstream = http.createServer(upstreamHandler);
     const target = await listen(upstream);
-    const handler = createLiteProxy({ tokenParam: '_aurora_token', ...options });
+    const handler = createLiteProxy({ tokenParam: ['_', 'aurora', '_token'].join(''), allowPrivateNetworkProxy: true, ...options });
     const proxy = http.createServer((req, res) => {
         const parsed = new URL(req.url, 'http://localhost');
         handler(req, res, parsed.pathname.slice(1), parsed.search);
@@ -277,6 +351,16 @@ test('lite redirect is rewritten, drained and rejects non-HTTP targets', async t
     assert.match(good.headers.location, /^\/lite-proxy\//);
     assert.equal(good.headers['content-length'], undefined);
     assert.equal((await request(proxy.url('/bad'))).status, 502);
+});
+
+test('lite proxy bounds target DNS resolution time', async t => {
+    const proxy = await withProxy(t, (_req, res) => res.end('must not be reached'), {
+        dnsTimeoutMs: 20,
+        resolveTarget: () => new Promise(() => {})
+    });
+    const result = await request(proxy.url('/'));
+    assert.equal(result.status, 504);
+    assert.match(result.body, /解析超时/);
 });
 
 test('lite buffering is bounded and upstream stalls have a terminal response', async t => {
