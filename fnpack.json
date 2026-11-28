@@ -239,6 +239,22 @@
               "size": 44027653
             }
           }
+        },
+        "1.0.28": {
+          "changelog": "### 网络访问保护\n\n- Wisp 与基础代理默认拒绝访问局域网、回环、链路本地及其他非公网目标；在 Aurora 页面中明确提示被阻止的局域网地址。\n- 仅在可信网络且确实需要访问路由器、PVE 等设备时，可通过启动环境变量 `ALLOW_PRIVATE_NETWORK_PROXY=1` 显式启用，并在重启后生效。\n- 基础代理检查域名解析的全部地址并固定实际连接地址，避免域名解析到内网或校验后地址变化绕过限制；DNS 查询设有超时。\n- 更新开发和排障说明；未开启该选项时普通互联网网站不受影响，启用后 HTTPS 内网目标仍走轻量代理。\n\n### 验证\n\n- 47 项 Node 回归和 11 项 Python 发布版本测试通过；覆盖 IPv4/IPv6 特殊地址、DNS 私网解析、连接地址固定、默认阻止与显式开启。",
+          "updated_at": "2026-11-28T07:03:32+00:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.28/fn-browser-arm64.fpk",
+              "sha256": "2413aced89f47e8c22a9d2fef993e2c562e3181dc538972e555c0a9714f00fa0",
+              "size": 43991114
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.28/fn-browser-x86_64.fpk",
+              "sha256": "b4c6fcf55ddb2d175d162cb389fdd354ecd9512b62569d948cd737ae6b000b78",
+              "size": 44030566
+            }
+          }
         }
       }
     }
