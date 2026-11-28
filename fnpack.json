@@ -207,6 +207,22 @@
               "size": 44036222
             }
           }
+        },
+        "1.0.26": {
+          "changelog": "### 功能收敛\n\n- 移除 NAS 下载管理按钮、气泡、菜单、Ctrl+J 接管、下载目录设置和目录选择器。\n- 移除服务端下载管理器、任务及文件接口、目录浏览与创建接口；启动时不再创建或恢复下载目录和任务记录。\n- 网页下载链接交回访问设备的浏览器处理，保留根证书下载及现有网页代理。\n- 升级不会主动删除旧下载文件与记录；旧版下载目录设置被忽略，不会再触发目录读写。\n- 同步首页、排障、开发与实施记录，新增界面和功能优化建议；历史版本说明保留原有上下文。\n\n网页下载仍受站点、代理和客户端限制；实际 fnOS 升级、手机体验与不同网站的下载行为需要真机确认。",
+          "updated_at": "2026-11-28T01:16:11+00:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.26/fn-browser-arm64.fpk",
+              "sha256": "123a227f0ddcc79daed3cd288dbb2d9ee742fb6dce8e1ebac7908e998b356187",
+              "size": 43987817
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.26/fn-browser-x86_64.fpk",
+              "sha256": "f38c08b2570624cd06e7e02b4ccb625ef2a5c6693e35855bc6e887b887338238",
+              "size": 44025056
+            }
+          }
         }
       }
     }
