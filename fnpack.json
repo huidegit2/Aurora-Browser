@@ -255,6 +255,22 @@
               "size": 44030566
             }
           }
+        },
+        "1.0.29": {
+          "changelog": "### 内网访问与标签页\n\n- 设置中新增“允许访问内网”开关，启停后即时应用于轻量代理与 Wisp；环境变量可强制覆盖并锁定界面。\n- 标签页上的快捷按钮和右键菜单支持手动休眠与恢复；可设置后台 15、30 或 60 分钟后自动休眠，恢复时重新加载页面并尽可能还原滚动位置。自动休眠默认关闭。\n- 自动休眠跳过可识别的音视频播放页，并在设置中说明页面重新加载与未提交内容的影响。\n\n### 验证\n\n- 新增内网开关实时生效、环境变量锁定、标签页休眠/恢复与媒体保护回归检查。",
+          "updated_at": "2026-11-28T10:55:37+00:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.29/fn-browser-arm64.fpk",
+              "sha256": "be9b915a18c4b67b0ced346e486135d82ee10bd8eec8da62180056660f2426bf",
+              "size": 43992936
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.29/fn-browser-x86_64.fpk",
+              "sha256": "3fe59dc828696bf49029d88c4e1834936bc4944d990c2e15c36667f0248b8581",
+              "size": 44028710
+            }
+          }
         }
       }
     }
