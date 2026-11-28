@@ -191,6 +191,22 @@
               "size": 44035668
             }
           }
+        },
+        "1.0.25": {
+          "changelog": "### 使用说明\n\n- 将首次 HTTPS 连接和证书指引整理到安装包的应用介绍中；安装或升级后，可直接在 fnOS 应用中心查看。\n- 补充不依赖应用界面的局域网证书下载地址，以及 Windows、Android、iPhone/iPad 的信任步骤；同步 FnDepot 应用源介绍。\n- 说明 iOS 安装描述文件后还需开启根证书完全信任，飞牛 App 内置页面可能采用不同信任策略。\n- 重写 README、实施与验证记录，新增连接排障、开发测试与自动发布指南；补记 v1.0.24 改动并修复历史日志中的本地文件链接。\n\n本版本更新应用介绍与文档，不改变代理或下载行为。新介绍需要安装或升级新版 FPK；真机上的介绍排版、证书信任和手机兼容性仍待验证。",
+          "updated_at": "2026-11-28T00:26:10+00:00",
+          "packages": {
+            "arm": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.25/fn-browser-arm64.fpk",
+              "sha256": "21ca1426a03c4e6829516449180fbadd115d7b68cfff24764ea29596bf19ca8d",
+              "size": 43997742
+            },
+            "x86": {
+              "download_url": "https://github.com/huidegit2/Aurora-Browser/releases/download/v1.0.25/fn-browser-x86_64.fpk",
+              "sha256": "24199917f565919975831f3e3318c99e9ca4e878e4a870bd86bbc4b592d7facf",
+              "size": 44036222
+            }
+          }
         }
       }
     }
