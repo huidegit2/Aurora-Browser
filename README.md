@@ -1,103 +1,133 @@
 # 极光浏览器 Aurora
 
-飞牛 fnOS 原生网页代理浏览器，提供 **ARM64** 与 **x86_64** 双架构 FPK。
+为飞牛 fnOS 提供网页代理、标签管理和 NAS 下载功能的原生 FPK 应用，支持 **ARM64** 与 **x86_64**。
 
-- **外网主力内核**：Scramjet（Service Worker + Epoxy/Wisp），现代站点与视频兼容性最佳
-- **内网直连兜底**：局域网 IP、`.local` 等提供内置轻量直连代理兜底；访问路由器 / PVE 等自签名 HTTPS 设备前需配置信任
-- **桌面级浏览体验**：多标签页、`Ctrl+Shift+T` 恢复关闭标签、书签/历史侧边栏、页内查找、线性 SVG 工具栏
-- **Chrome 风格下载管理**：右上角独立下载气泡浮窗、网页下载接管、NAS 服务端直下、飞牛存储目录选择器
-- **HTTPS 与自定义证书**：内置 `18921` HTTPS 入口，支持自动生成本地根 CA 或直接加载外部受信任证书；可选 `AUTH_TOKEN` 鉴权
+Aurora 由 NAS 提供代理转发和下载服务，网页仍由访问设备的浏览器渲染。应用无需 Docker 或远程桌面；网站兼容性取决于代理模式、客户端浏览器和访问环境。
 
-## FnDepot 外部应用源
+[下载正式版本](https://github.com/huidegit2/Aurora-Browser/releases/latest) · [更新日志](CHANGELOG.md) · [连接与排障](docs/TROUBLESHOOTING.md) · [开发与发布](docs/DEVELOPMENT.md) · [实施与验证记录](IMPLEMENTATION-NOTES.md)
 
-本项目已按 [EWEDLCM/FnDepot](https://github.com/EWEDLCM/FnDepot/) **V2 外部应用源规范** 提供根目录索引文件 [fnpack.json](https://github.com/huidegit2/Aurora-Browser/blob/main/fnpack.json)，可在 FnDepot 客户端中直接添加以下任一源地址：
+## 下载与安装
 
-- **GitHub 仓库源（推荐）**：
-  ```text
-  https://github.com/huidegit2/Aurora-Browser
-  ```
-- **`fnpack.json` 直链**：
-  ```text
-  https://raw.githubusercontent.com/huidegit2/Aurora-Browser/main/fnpack.json
-  ```
+正式安装包见 [**最新 Release**](https://github.com/huidegit2/Aurora-Browser/releases/latest)，版本号与发布说明以该页为准。以下地址会指向最新正式版的对应架构附件。
 
-## 内核与证书说明
+| NAS 架构 | 安装包 |
+| --- | --- |
+| ARM64 | [fn-browser-arm64.fpk](https://github.com/huidegit2/Aurora-Browser/releases/latest/download/fn-browser-arm64.fpk) |
+| x86_64 | [fn-browser-x86_64.fpk](https://github.com/huidegit2/Aurora-Browser/releases/latest/download/fn-browser-x86_64.fpk) |
 
-**第一批开发副本兼容说明：** 基础代理与 NAS 下载已恢复 Node 默认目标站点 TLS 校验。自签名 HTTPS 目标需配置正确证书/受信 CA，可在启动前按 Node 标准设置 `NODE_EXTRA_CA_CERTS`；这与访问本应用入口时的证书信任是两回事。基础代理新增的沙箱可能限制登录、同源存储和弹窗。完整改动、测试与尚未验证项目见 [实施说明](IMPLEMENTATION-NOTES.md)；本开发副本尚未发布为 FPK 安装包。
+1. 按 NAS 的实际 CPU 架构选择安装包，在 fnOS 应用中心手动安装。
+2. 启动应用后，从 fnOS 桌面入口打开 Aurora。默认入口使用 HTTPS，端口为 `18921`。
+3. 如果浏览器提示证书不受信任，先按[证书与访问指南](docs/TROUBLESHOOTING.md#入口证书不受信任)完成配置，再使用完整代理功能。
+4. 在应用设置中配置访问密码和下载目录。写入共享文件夹前，需要为应用授予相应的文件夹权限。
 
-| 内核 | 依赖 | 适用场景 | 状态 |
-|------|------|----------|------|
-| Scramjet | HTTPS + Service Worker | 外网现代站点 | 活跃维护，主力 |
-| 轻量直连 | 仅 Node.js | 内网设备、HTTP 入口兜底 | 默认可用 |
+内部应用标识保持为 `fn-browser`，显示名称为“极光浏览器”。升级前请备份应用数据和自行配置的证书；安装后的实际兼容性仍需结合设备与系统版本验证。
 
-Scramjet 依赖浏览器的安全上下文（受信任的 HTTPS 或 `http://localhost`），**未信任的自签证书或纯 HTTP 会导致浏览器禁用 Service Worker，无法激活满血内核**：
+## 能做什么
 
-### 方式一：局域网 IP 使用自带根证书（`18921` 端口，每台设备仅需装一次）
+| 功能 | 当前支持情况 |
+| --- | --- |
+| 网页访问 | Scramjet 为主要代理路径，另有基础代理作为部分场景的回退方案 |
+| 标签页 | 多标签、关闭恢复、前进后退及加载状态显示 |
+| 日常管理 | 书签、访问历史、搜索引擎、浅色/深色主题、页内查找 |
+| NAS 下载 | 直链下载、进度与速度、取消、重新下载、文件取回及删除 |
+| 连接设置 | 内置 HTTPS、自定义证书、根证书下载与连接自检 |
+| 访问保护 | 可选访问密码、环境变量口令、管理 API 与 WebSocket 来源检查 |
 
-1. 打开 `https://<NAS-IP>:18921`（首次浏览器会提示不安全，先点“高级 -> 继续前往”进入外壳），或点击页面顶部的「在新窗口以 HTTPS 打开」。
-2. 点击右上角菜单 **「⋮」 -> 「HTTPS 全功能」** 下载对应设备的根证书：
-   - **Windows / Android**：下载 [`aurora-ca.crt`](https://<NAS-IP>:18921/aurora-ca.crt)
-     - *Windows*：双击证书 ->「安装证书」->「本地计算机」->「将所有的证书都放入下列存储」-> 浏览选择 **「受信任的根证书颁发机构」** -> 完成。
-     - *Android*：系统设置搜索「安装证书」->「CA 证书」-> 选择下载的 `.crt` 文件。App 内置页面是否信任用户 CA 还取决于该 App 配置；导入后仍无法访问时，请用系统浏览器检查入口。
-   - **iPhone / iPad**：用 Safari 下载 [`aurora-ca.mobileconfig`](https://<NAS-IP>:18921/aurora-ca.mobileconfig) ->「设置 -> 通用 -> VPN 与设备管理」安装描述文件 -> 再到「设置 -> 通用 -> 关于本机 -> 证书信任设置」开启完全信任。
-3. 安装信任后刷新 `https://<NAS-IP>:18921`，地址栏恢复安全锁，左下角即显示 **Scramjet 内核**。
+部分网站的登录、视频、验证码、弹窗和存储功能可能受代理及浏览器安全策略影响。Aurora 不承诺与完整桌面浏览器等同的站点兼容性。
 
-### 方式二：已有域名证书（全设备免装根证书，推荐）
+### 两种代理模式
 
-- **飞牛反向代理**：在飞牛「反向代理」将你的 HTTPS 域名反代到 `http://127.0.0.1:18920`（务必开启 **WebSocket** 支持）；
-- **直接挂载证书**：将证书与私钥放到应用数据目录 `tls/custom.crt.pem` 与 `tls/custom.key.pem`（或设置环境变量 `TLS_CERT_PATH` / `TLS_KEY_PATH`），重启应用即可让 `18921` 端口直接使用你的受信任证书。
+| 模式 | 主要用途 | 使用条件与边界 |
+| --- | --- | --- |
+| Scramjet | 访问需要较完整脚本支持的网站 | 依赖客户端浏览器支持 Service Worker，并处于可信安全上下文；NAS 负责转发网络请求 |
+| 基础代理 | 部分内网设备、简单网页及回退访问 | 能力较有限；安全沙箱会限制部分登录、存储、弹窗及父页面操作 |
 
-### 方式三：电脑端免证书临时方案
+局域网 IP 的普通 HTTP 页面可以用来检查应用主页是否可达，但不能据此判断 Scramjet 已可用。具体排查方法见[连接与排障](docs/TROUBLESHOOTING.md)。
 
-- 连接局域网或 WireGuard 后执行 `ssh -N -L 18920:127.0.0.1:18920 用户名@NAS_IP`，浏览器打开 `http://localhost:18920` 即可零证书激活 Scramjet。
+## 首次连接与证书
 
-## NAS 下载与飞牛目录授权
+推荐使用**有效域名证书和 HTTPS 入口**，减少逐台设备导入根证书的操作。已有受信任证书时，可以通过支持 WebSocket 的反向代理接入，也可以为应用配置自定义证书。
 
-- 点击工具栏下载按钮（或按 `Ctrl+J`）打开独立下载浮窗，支持直链下载到 NAS、实时进度与速度显示、取消、重试、取回本地及删文件。
-- 默认下载到应用数据目录 `downloads/`；点击「更改」可浏览飞牛存储目录或直接输入路径。
-- 如需写入 `/vol1/...` 等共享文件夹，请在飞牛 **系统设置 -> 应用 -> 极光浏览器 -> 文件夹权限** 中授权目标目录。
+使用内置本地根 CA 时，每台访问设备都需要分别导入并信任。安装后可直接在 **fnOS 应用中心 → 极光浏览器的应用详情 → 应用介绍** 查看证书摘要，不必先进入 Aurora；介绍随新版 FPK 安装或升级更新。
 
-## 构建
+如果 HTTPS 页面打不开，可在自己的可信局域网内先用系统浏览器下载 CA，将示例 IP 替换为 NAS 实际地址：
 
-```bash
-./build.sh arm   # -> dist/fn-browser-arm64.fpk   (manifest platform = arm)
-./build.sh x86   # -> dist/fn-browser-x86_64.fpk  (manifest platform = x86)
+| 设备 | 证书下载与信任 |
+| --- | --- |
+| Windows / Android | 下载 `http://192.168.1.10:18920/aurora-ca.crt`；Windows 导入当前用户的“受信任的根证书颁发机构”，Android 选择安装“CA 证书” |
+| iPhone / iPad | 用 Safari 下载 `http://192.168.1.10:18920/aurora-ca.mobileconfig`；安装描述文件后，在“关于本机 → 证书信任设置”中开启完全信任 |
+
+完成后重新打开 `https://192.168.1.10:18921`，并查看“连接自检”。分平台完整操作见[证书安装步骤](docs/TROUBLESHOOTING.md#使用内置本地根-ca)。仅忽略证书警告不能保证 Service Worker 可用；飞牛 App 内置页面的信任策略也可能与系统浏览器不同。
+
+还需区分两条连接：
+
+- **访问设备 → Aurora**：入口证书影响是否能打开应用，以及客户端能否启用 Service Worker。
+- **Aurora → 目标网站**：基础代理与 NAS 下载使用 Node 默认 TLS 校验。访问自签名 HTTPS 设备时，应为目标配置正确证书，或为服务端明确添加受信 CA。
+
+配置方式及常见错误见[证书与反向代理说明](docs/TROUBLESHOOTING.md#使用已有域名证书)。
+
+## 下载到 NAS
+
+从工具栏打开下载面板，可提交下载链接、查看进度、更改下载目录或处理已完成文件。默认目录是应用数据目录下的 `downloads/`。
+
+选择共享文件夹后，如果提示无写入权限，请先检查 fnOS 分配给应用的目录权限。不要仅因为能在文件管理器中访问某个目录，就假定应用进程也拥有同样权限。
+
+当前下载功能的边界：
+
+- 失败重试会重新发起下载，**不支持 Range 断点续传**。
+- 应用重启后，未完成任务会被标记为中断失败，不会自动接着下载。
+- 暂未提供并发执行队列与自动恢复调度。
+- NAS 发起下载时，不会自动继承手机或电脑浏览器中目标网站的登录会话。
+
+异常处理和配置说明见[下载排障](docs/TROUBLESHOOTING.md#下载失败或无法写入目录)。
+
+## FnDepot 应用源
+
+仓库通过 [fnpack.json](fnpack.json) 提供 FnDepot V2 外部应用源索引。可使用仓库地址或索引直链添加应用源：
+
+```text
+https://github.com/huidegit2/Aurora-Browser
 ```
 
-内部 `appname` 固定为 `fn-browser`，保证老版本覆盖升级；应用中心显示名为「极光浏览器」。
+```text
+https://raw.githubusercontent.com/huidegit2/Aurora-Browser/main/fnpack.json
+```
+
+正式发布流程会同步写入版本说明、下载地址、SHA-256 和文件大小。客户端何时显示新版本，还取决于其刷新与缓存策略。
 
 ## 自动构建与发布
 
-推送 `v*` 标签，或在 Actions 页面手动触发 **Build and Release FPK**：
+代码推送或合并到 `main` 后，[发布工作流](.github/workflows/release.yml)会自动执行：
 
-- 自动构建 arm64 与 x86_64 两个 FPK
-- 从 `CHANGELOG.md` 对应版本段落提取更新日志
-- 创建 GitHub Release 并上传两个安装包
-- 自动计算 SHA256 与文件大小并同步更新根目录 `fnpack.json`
+1. 运行语法检查、Node 回归和 Python 版本逻辑测试。
+2. 计算版本号，并同步构建目录中的应用版本元数据。
+3. 构建 ARM64 与 x86_64 两个 FPK，保存构建产物。
+4. 创建正式 GitHub Release、上传安装包。
+5. 更新 FnDepot 索引中的下载地址和校验信息。
 
-## 鉴权（建议）
+仅修改 Markdown 或应用源索引不会触发新版本发布。推送版本标签、手动指定版本以及“只构建、不发布”仍受支持。版本规则和手动操作见[开发与发布指南](docs/DEVELOPMENT.md#版本与自动发布)。
 
-在应用运行环境设置 `AUTH_TOKEN` 后，`/api/*`、`/lite-proxy/*` 和 `/wisp/` 都需要鉴权。访问外壳时带上一次 token：
+## 访问保护
 
-```text
-https://<nas>:18921/?_aurora_token=<your-token>
-```
+建议在应用设置中启用访问密码；管理员也可通过 `AUTH_TOKEN` 环境变量设置优先口令。不配置密码时，实例仍可能允许未认证访问，并没有强制的首次设置向导或完整多用户隔离。
 
-前端会把它缓存到 `sessionStorage`，后续请求自动携带。不设置 `AUTH_TOKEN` 时保持内网开箱即用，**公网暴露时必须设置**。
+将应用开放到外网前，应先配置访问保护、受信任的 HTTPS 入口和明确的访问范围。当前加固并不等同于完整安全审计，剩余工作见[实施与验证记录](IMPLEMENTATION-NOTES.md#仍需完成的工作)。
 
-## 目录
+## 开发入口
 
-- `fnpack.json` — FnDepot V2 外部应用源索引
-- `cmd/` — 生命周期脚本（安装/启动/停止/状态）
-- `config/` — 权限与资源声明
-- `wizard/` — fnpack 预检所需目录
-- `app/server/` — Node.js 服务端（Scramjet/Wisp + 轻量代理 + 下载/文件 API）
-- `app/www/` — 前端页面与 Service Worker
-- `app/ui/` — 飞牛桌面入口配置与图标
-- `assets/icon.svg` — 图标矢量设计源
-- `scripts/` — 图标生成、更新日志提取
-- `.github/workflows/release.yml` — 自动构建与发布
+源代码运行、回归测试、双架构构建和发布恢复操作统一放在[开发与发布指南](docs/DEVELOPMENT.md)。
 
-## 许可
+常用目录：
 
-本项目代码未声明许可证。捆绑的 Scramjet / epoxy-transport 为 AGPL-3.0，wisp-js 为 LGPL-3.0-or-later；分发 FPK 时请履行对应开源义务。
+| 路径 | 内容 |
+| --- | --- |
+| [app/server](app/server) | Node.js 服务、基础代理、下载、TLS 与存储模块 |
+| [app/www](app/www) | 浏览器界面与 Service Worker |
+| [app/ui](app/ui) | fnOS 桌面入口和图标 |
+| [cmd](cmd) / [config](config) | 应用生命周期、权限和资源声明 |
+| [scripts](scripts) | 图标生成、更新日志提取与发布版本处理 |
+| [tests](tests) | 前端、下载、安全及版本逻辑回归 |
+
+## 许可证
+
+仓库声明采用 **AGPL-3.0**，见 [LICENSE](LICENSE)。第三方组件的许可声明以其上游项目和实际分发包中的许可证为准。

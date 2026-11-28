@@ -9,7 +9,7 @@
   "apps": {
     "fn-browser": {
       "display_name": "极光浏览器",
-      "desc": "极光浏览器 Aurora · 飞牛 fnOS 原生网页代理浏览器，搭载 Scramjet 满血内核，支持 Chrome 风格下载气泡浮窗、飞牛存储目录直下与多标签页管理。\n\n【证书与满血内核说明】Scramjet 内核依赖浏览器安全上下文（受信任的 HTTPS）：\n1. 局域网 IP 访问（18921 端口）：打开右上角菜单「HTTPS 全功能」，下载并安装信任根证书（Windows/Android：/aurora-ca.crt；iPhone/iPad：/aurora-ca.mobileconfig），仅需安装一次即可消除「不安全」提示并激活满血内核。\n2. 已有域名证书（免装根证书）：可在飞牛「反向代理」将 HTTPS 域名反代至 18920 端口（开启 WebSocket），或将证书放入数据目录 tls/custom.crt.pem 与 custom.key.pem。",
+      "desc": "极光浏览器 Aurora · 飞牛 fnOS 原生网页代理浏览器，支持多标签、书签、历史和 NAS 下载。\n\n【首次使用与证书】\nScramjet 完整代理需要受信任的 HTTPS，默认入口为 https://NAS地址:18921；请将 NAS地址替换为实际 IP。只跳过证书警告不能保证 Service Worker 可用。\n\n【局域网 IP 访问】\n在自己的可信局域网内，用系统浏览器从 http://NAS地址:18920/aurora-ca.crt 下载本机 CA；iPhone/iPad 用 Safari 下载 http://NAS地址:18920/aurora-ca.mobileconfig，无需先进入应用。\nWindows：安装到当前用户的「受信任的根证书颁发机构」。\nAndroid：设置中搜索「安装证书」，选择「CA 证书」。\niPhone/iPad：在「通用 → VPN 与设备管理」安装描述文件，再到「通用 → 关于本机 → 证书信任设置」开启完全信任。\n每台设备需分别信任本机 CA，完成后重新打开 HTTPS 入口并检查「连接自检」。飞牛 App 内仍打不开时，先用系统浏览器对照。\n\n【已有有效域名证书】\n用独立域名根路径反代到 http://127.0.0.1:18920，启用 WebSocket 并保留 Host 与 X-Forwarded-Proto；或在应用数据目录配置 tls/custom.crt.pem 和 tls/custom.key.pem，重启后用证书覆盖的域名访问。\n完整指南：https://github.com/huidegit2/Aurora-Browser/blob/main/docs/TROUBLESHOOTING.md",
       "platform": [
         "arm",
         "x86"
