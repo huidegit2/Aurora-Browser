@@ -213,6 +213,58 @@ test('complete inline application script parses', () => {
   assert.doesNotThrow(() => new vm.Script(source));
 });
 
+test('frame download links keep native behavior while ordinary popup links still open Aurora tabs', () => {
+  const h = harness();
+  const listeners = new Map();
+  const opened = [];
+  const frameWindow = { open() {} };
+  const frameDocument = { addEventListener: (name, callback) => listeners.set(name, callback) };
+  h.context.openTabFromFramePopup = (url) => opened.push(url);
+  vm.runInContext(applicationFunction('installFramePopupGuards'), h.context);
+  h.context.installFramePopupGuards({ contentWindow: frameWindow, contentDocument: frameDocument });
+  const click = listeners.get('click');
+  assert.equal(typeof click, 'function');
+  function followLink(download, modifiers = {}) {
+    const anchor = {
+      href: 'https://files.test/report.pdf',
+      getAttribute: (name) => ({ href: '/report.pdf', target: '_blank' })[name] || '',
+      hasAttribute: (name) => name === 'download' && download
+    };
+    let prevented = false;
+    let stopped = false;
+    click({
+      target: { closest: () => anchor },
+      preventDefault() { prevented = true; },
+      stopPropagation() { stopped = true; },
+      stopImmediatePropagation() { stopped = true; },
+      ...modifiers
+    });
+    return { prevented, stopped };
+  }
+  assert.deepEqual(followLink(true), { prevented: false, stopped: false });
+  assert.deepEqual(followLink(true, { ctrlKey: true }), { prevented: false, stopped: false });
+  assert.deepEqual(opened, []);
+  assert.equal(h.requests.length, 0);
+  assert.deepEqual(followLink(false), { prevented: true, stopped: true });
+  assert.deepEqual(opened, ['https://files.test/report.pdf']);
+});
+
+test('download shortcut is left to the host browser after NAS management is removed', () => {
+  const h = harness();
+  let onKeydown;
+  h.context.window.addEventListener = (name, callback) => { if (name === 'keydown') onKeydown = callback; };
+  const start = source.indexOf('// 快捷键支持');
+  const end = source.indexOf('// 系统主题变化时', start);
+  assert.ok(start >= 0 && end > start);
+  vm.runInContext(source.slice(start, end), h.context);
+  for (const modifier of ['ctrlKey', 'metaKey']) {
+    let prevented = false;
+    onKeydown({ key: 'j', [modifier]: true, preventDefault() { prevented = true; } });
+    assert.equal(prevented, false);
+  }
+  assert.equal(h.requests.length, 0);
+});
+
 test('blocked sessionStorage retains URL token and strips the address before authentication', async () => {
   const denied = () => { throw new Error('Storage denied'); };
   const h = harness({ authenticated: false, href: 'https://aurora.test/?_aurora_token=secret&keep=1#top',

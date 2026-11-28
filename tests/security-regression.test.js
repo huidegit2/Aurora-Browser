@@ -61,20 +61,24 @@ function request(url, { method = 'GET', headers = {}, body } = {}) {
 
 // Load the real request/upgrade handlers without listening on a public port,
 // loading native proxy dependencies or creating system certificates.
-function loadApp(t, auth = '') {
+function loadApp(t, auth = '', options = {}) {
     const fixture = fs.mkdtempSync(path.join(__dirname, '.security-test-'));
     t.after(() => {
         assert.equal(path.dirname(fixture), __dirname);
         fs.rmSync(fixture, { recursive: true, force: true });
     });
+    if (options.prepare) options.prepare(fixture);
     const filename = path.resolve(__dirname, '../app/server/index.js');
     const nativeRequire = createRequire(filename);
     const fakeServer = { on() { return this; }, listen() { return this; } };
     const sandbox = {
         require(name) {
             if (name === 'http') return { ...http, createServer: () => fakeServer };
+            if (name === './storage') return { ...nativeRequire(name), ...options.storage };
             if (name === './tls') return { createTlsManager: () => ({
-                httpsStatus: { enabled: false, port: 0, mode: 'ca' }, initTlsMaterials: () => null, getCaCertDer: () => null
+                httpsStatus: { enabled: false, port: 0, mode: 'ca' }, initTlsMaterials: () => null,
+                getCaCertDer: () => options.caDer || null,
+                buildCaMobileConfig: () => '<plist>fixture certificate profile</plist>'
             }) };
             if (name.startsWith('@mercuryworkshop/')) throw new Error('optional engine omitted in handler tests');
             return nativeRequire(name);
@@ -109,20 +113,102 @@ test('real API handler denies sandbox/foreign calls and accepts authenticated sa
     assert.equal(JSON.parse(malformed.body).authenticated, false);
 });
 
-test('rejected settings update does not activate an unpersisted password', async t => {
-    const app = loadApp(t);
+test('failed settings persistence does not activate an unpersisted password', async t => {
+    const app = loadApp(t, '', { storage: { writeJson() { throw Object.assign(new Error('disk full'), { code: 'ENOSPC' }); } } });
     const server = http.createServer(app.requestHandler);
     const origin = await listen(server);
     t.after(() => close(server));
-    const notDirectory = path.join(app.fixture, 'plain-file');
-    fs.writeFileSync(notDirectory, 'fixture');
+    const settingsBefore = fs.readFileSync(path.join(app.fixture, 'settings.json'));
     const result = await request(origin + '/api/settings', {
         method: 'PUT', headers: { origin, 'content-type': 'application/json' },
-        body: JSON.stringify({ authPassword: 'uncommitted-password', downloadDir: notDirectory })
+        body: JSON.stringify({ authPassword: 'uncommitted-password' })
     });
-    assert.equal(result.status, 400);
+    assert.equal(result.status, 500);
+    assert.equal(result.headers['set-cookie'], undefined);
     const auth = await request(origin + '/api/auth/status');
     assert.equal(JSON.parse(auth.body).authRequired, false);
+    assert.deepEqual(fs.readFileSync(path.join(app.fixture, 'settings.json')), settingsBefore);
+});
+
+test('fresh startup creates no NAS download directory or records', t => {
+    const app = loadApp(t);
+    assert.equal(fs.existsSync(path.join(app.fixture, 'downloads')), false);
+    assert.equal(fs.existsSync(path.join(app.fixture, 'downloads.json')), false);
+    assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(path.join(app.fixture, 'settings.json'))), 'downloadDir'), false);
+});
+
+test('removed download and directory APIs return 404 even to an authenticated caller', async t => {
+    const app = loadApp(t, 'fixture-pass');
+    const server = http.createServer(app.requestHandler);
+    const origin = await listen(server);
+    t.after(() => close(server));
+    const cases = [
+        ['GET', '/api/downloads'], ['POST', '/api/downloads'], ['DELETE', '/api/downloads'],
+        ['POST', '/api/downloads/old/cancel'], ['GET', '/api/downloads/old/file'],
+        ['DELETE', '/api/downloads/old?deleteFile=1'], ['GET', '/api/fs/roots'],
+        ['GET', '/api/fs/list?dir=/'], ['POST', '/api/fs/mkdir']
+    ];
+    for (const [method, route] of cases) {
+        const result = await request(origin + route, {
+            method, headers: { origin, 'x-aurora-token': 'fixture-pass', 'content-type': 'application/json' },
+            body: method === 'POST' ? JSON.stringify({ url: 'http://127.0.0.1:1/unused', parent: app.fixture, name: 'unexpected' }) : undefined
+        });
+        assert.equal(result.status, 404, method + ' ' + route);
+        assert.equal(JSON.parse(result.body).error, 'API route not found');
+    }
+    assert.equal(fs.existsSync(path.join(app.fixture, 'unexpected')), false);
+    assert.equal(fs.existsSync(path.join(app.fixture, 'downloads')), false);
+});
+
+test('legacy download files and records are left untouched and removed settings never create a directory', async t => {
+    for (const records of ['[{"id":"old","status":"downloading"}]', '{broken legacy records']) {
+        let oldDir;
+        const app = loadApp(t, 'fixture-pass', { prepare(fixture) {
+            oldDir = path.join(fixture, 'downloads');
+            fs.mkdirSync(oldDir);
+            fs.writeFileSync(path.join(oldDir, 'saved.bin'), 'old completed file');
+            fs.writeFileSync(path.join(oldDir, 'pending.bin.part'), 'old partial file');
+            fs.writeFileSync(path.join(fixture, 'downloads.json'), records);
+            fs.writeFileSync(path.join(fixture, 'settings.json'), JSON.stringify({ downloadDir: oldDir, theme: 'dark' }));
+        } });
+        const server = http.createServer(app.requestHandler);
+        const origin = await listen(server);
+        t.after(() => close(server));
+        const headers = { origin, 'x-aurora-token': 'fixture-pass', 'content-type': 'application/json' };
+        const before = await request(origin + '/api/settings', { headers });
+        assert.equal(before.status, 200);
+        assert.equal(Object.hasOwn(JSON.parse(before.body), 'downloadDir'), false);
+        assert.equal(JSON.parse(before.body).theme, 'dark');
+        const unwantedDir = path.join(app.fixture, 'must-not-be-created');
+        const saved = await request(origin + '/api/settings', {
+            method: 'PUT', headers, body: JSON.stringify({ downloadDir: unwantedDir, theme: 'light' })
+        });
+        assert.equal(saved.status, 200);
+        assert.equal(Object.hasOwn(JSON.parse(saved.body), 'downloadDir'), false);
+        assert.equal(JSON.parse(saved.body).theme, 'light');
+        assert.equal(fs.existsSync(unwantedDir), false);
+        assert.equal(fs.readFileSync(path.join(app.fixture, 'downloads.json'), 'utf8'), records);
+        assert.equal(fs.readFileSync(path.join(oldDir, 'saved.bin'), 'utf8'), 'old completed file');
+        assert.equal(fs.readFileSync(path.join(oldDir, 'pending.bin.part'), 'utf8'), 'old partial file');
+        assert.deepEqual(fs.readdirSync(oldDir).sort(), ['pending.bin.part', 'saved.bin']);
+        assert.equal(Object.hasOwn(JSON.parse(fs.readFileSync(path.join(app.fixture, 'settings.json'))), 'downloadDir'), false);
+    }
+});
+
+test('certificate downloads remain available before authentication', async t => {
+    const app = loadApp(t, 'fixture-pass', { caDer: Buffer.from('fixture certificate') });
+    const server = http.createServer(app.requestHandler);
+    const origin = await listen(server);
+    t.after(() => close(server));
+    const certificate = await request(origin + '/aurora-ca.crt');
+    assert.equal(certificate.status, 200);
+    assert.equal(certificate.body, 'fixture certificate');
+    assert.match(certificate.headers['content-disposition'], /aurora-ca\.crt/);
+    const profile = await request(origin + '/aurora-ca.mobileconfig');
+    assert.equal(profile.status, 200);
+    assert.match(profile.body, /fixture certificate profile/);
+    assert.match(profile.headers['content-disposition'], /aurora-ca\.mobileconfig/);
+    assert.equal((await request(origin + '/api/settings', { headers: { origin } })).status, 401);
 });
 
 test('real WebSocket handler checks origin before invoking Wisp transport', t => {

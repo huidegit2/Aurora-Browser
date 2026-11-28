@@ -18,13 +18,4 @@ function writeJson(filePath, data) {
     fs.renameSync(tmp, filePath);
 }
 
-function isDirWritable(dirPath) {
-    try {
-        fs.accessSync(dirPath, fs.constants.W_OK);
-        return true;
-    } catch {
-        return false;
-    }
-}
-
-module.exports = { readJson, writeJson, isDirWritable };
+module.exports = { readJson, writeJson };

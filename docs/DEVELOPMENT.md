@@ -61,9 +61,8 @@ python3 -m unittest discover -s tests -p 'test_release_version.py' -v
 
 | 范围 | 关注点 |
 | --- | --- |
-| [前端回归](../tests/frontend-regression.test.js) | 认证与启动容错、导航序号、过时通知、帧释放和标签归属 |
-| [下载回归](../tests/downloads-regression.test.js) | 超时、网络中断、取消、临时文件、持久化错误和终态恢复 |
-| [安全回归](../tests/security-regression.test.js) | API / WebSocket 来源检查、代理头清洗、沙箱和上游异常 |
+| [前端回归](../tests/frontend-regression.test.js) | 启动与导航、帧归属、原生下载链接和浏览器快捷键 |
+| [安全回归](../tests/security-regression.test.js) | API / WebSocket 来源检查、代理安全、设置写入失败与已移除接口 |
 | [版本回归](../tests/test_release_version.py) | 自动递增、标签排序、同提交重跑、输入校验和构建元数据同步 |
 
 Node 回归通过本机临时 HTTP 服务、实际函数和轻量 DOM 模拟进行验证，不会连接用户 NAS；它们不等同于真实手机或完整浏览器端到端测试。
@@ -71,7 +70,7 @@ Node 回归通过本机临时 HTTP 服务、实际函数和轻量 DOM 模拟进�
 使用支持该选项的 Node.js 版本时，可在不支持测试子进程的受限环境中显式关闭测试隔离：
 
 ```sh
-node --test --test-isolation=none tests/frontend-regression.test.js tests/downloads-regression.test.js tests/security-regression.test.js
+node --test --test-isolation=none tests/frontend-regression.test.js tests/security-regression.test.js
 ```
 
 此选项不是所有受支持 Node 版本都具备，常规环境优先使用上面的标准测试命令。

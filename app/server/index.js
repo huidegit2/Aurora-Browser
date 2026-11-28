@@ -5,9 +5,8 @@ const https = require('https');
 const path = require('path');
 const { URL } = require('url');
 
-const { readJson, writeJson, isDirWritable } = require('./storage');
+const { readJson, writeJson } = require('./storage');
 const { createTlsManager } = require('./tls');
-const { createDownloadManager } = require('./downloads');
 const { createLiteProxy } = require('./lite-proxy');
 const { isTrustedBrowserRequest, safeCookieValue } = require('./request-security');
 
@@ -83,9 +82,6 @@ fs.mkdirSync(CACHE_DIR, { recursive: true });
 const BOOKMARKS_FILE = path.join(DATA_DIR, 'bookmarks.json');
 const HISTORY_FILE = path.join(DATA_DIR, 'history.json');
 const SETTINGS_FILE = path.join(DATA_DIR, 'settings.json');
-const DOWNLOADS_FILE = path.join(DATA_DIR, 'downloads.json');
-const DEFAULT_DOWNLOAD_DIR = path.join(DATA_DIR, 'downloads');
-fs.mkdirSync(DEFAULT_DOWNLOAD_DIR, { recursive: true });
 
 const DEFAULT_BOOKMARKS = [
     { id: 'bm-1', title: '必应搜索', url: 'https://cn.bing.com', category: '常用网站', color: '#0FC6C2' },
@@ -100,8 +96,7 @@ const DEFAULT_SETTINGS = {
     searchEngine: 'bing',
     theme: 'system',
     homepageMode: 'dashboard',
-    maxHistory: 200,
-    downloadDir: DEFAULT_DOWNLOAD_DIR
+    maxHistory: 200
 };
 
 readJson(BOOKMARKS_FILE, DEFAULT_BOOKMARKS);
@@ -110,22 +105,12 @@ const initSettings = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
 if (!ENV_AUTH_TOKEN && initSettings.authPassword) {
     activeAuthToken = String(initSettings.authPassword);
 }
-readJson(DOWNLOADS_FILE, []);
-
 const tlsManager = createTlsManager({
     dataDir: DATA_DIR,
     settingsFile: SETTINGS_FILE,
     defaultSettings: DEFAULT_SETTINGS,
     httpsPort: HTTPS_PORT,
     readJson
-});
-
-const downloadManager = createDownloadManager({
-    downloadsFile: DOWNLOADS_FILE,
-    defaultDownloadDir: DEFAULT_DOWNLOAD_DIR,
-    readJson,
-    writeJson,
-    isDirWritable
 });
 
 const handleLiteProxy = createLiteProxy({ tokenParam: TOKEN_PARAM });
@@ -358,9 +343,7 @@ async function handleApi(req, res, pathname, parsedUrl) {
 
     if (pathname === '/api/settings') {
         if (req.method === 'GET') {
-            const current = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
-            if (!current.downloadDir) current.downloadDir = DEFAULT_DOWNLOAD_DIR;
-            const { authPassword, ...safe } = current;
+            const { authPassword, downloadDir, ...safe } = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
             return sendJson(res, 200, {
                 ...safe,
                 hasAuthPassword: Boolean(authPassword),
@@ -370,6 +353,9 @@ async function handleApi(req, res, pathname, parsedUrl) {
         if (req.method === 'PUT') {
             const patch = await parseBody(req);
             const current = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
+            // Ignore the removed download preference without touching its old directory.
+            delete patch.downloadDir;
+            delete current.downloadDir;
             const extraHeaders = {};
             if (typeof patch.authPassword === 'string') {
                 if (ENV_AUTH_TOKEN) {
@@ -378,23 +364,7 @@ async function handleApi(req, res, pathname, parsedUrl) {
                 const nextPass = patch.authPassword.trim();
                 patch.authPassword = nextPass;
                 // Activate the new password only after the entire update is validated
-                // and persisted, so a bad download directory cannot lock out the UI.
-            }
-            if (typeof patch.downloadDir === 'string') {
-                const targetDir = path.resolve(patch.downloadDir.trim() || DEFAULT_DOWNLOAD_DIR);
-                try {
-                    fs.mkdirSync(targetDir, { recursive: true });
-                    if (!isDirWritable(targetDir)) {
-                        return sendJson(res, 400, {
-                            code: 'EACCES_SHARE_PATH',
-                            error: '该目录不可写，请在飞牛「应用设置 -> 文件夹权限」中授权，或选择应用默认目录'
-                        });
-                    }
-                    patch.downloadDir = targetDir;
-                } catch (err) {
-                    const code = err && (err.code === 'EACCES' || err.code === 'EPERM') ? 'EACCES_SHARE_PATH' : 'DIR_ERROR';
-                    return sendJson(res, 400, { code, error: `无法访问目录: ${err.message}` });
-                }
+                // and persisted, so a failed settings write cannot lock out the UI.
             }
             const updated = { ...current, ...patch };
             writeJson(SETTINGS_FILE, updated);
@@ -413,77 +383,6 @@ async function handleApi(req, res, pathname, parsedUrl) {
                 },
                 extraHeaders
             );
-        }
-    }
-
-    if (pathname === '/api/fs/roots' && req.method === 'GET') {
-        return sendJson(res, 200, {
-            defaultDir: DEFAULT_DOWNLOAD_DIR,
-            roots: downloadManager.getFnOsRoots()
-        });
-    }
-
-    if (pathname === '/api/fs/list' && req.method === 'GET') {
-        const result = downloadManager.listDir(parsedUrl.searchParams.get('dir'));
-        return sendJson(res, result.ok ? 200 : 400, result);
-    }
-
-    if (pathname === '/api/fs/mkdir' && req.method === 'POST') {
-        const body = await parseBody(req);
-        const result = downloadManager.makeDir(body.parent, body.name);
-        return sendJson(res, result.ok ? 201 : 400, result);
-    }
-
-    if (pathname === '/api/downloads') {
-        if (req.method === 'GET') {
-            const settings = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
-            return sendJson(res, 200, {
-                downloadDir: settings.downloadDir || DEFAULT_DOWNLOAD_DIR,
-                items: downloadManager.getDownloadsList()
-            });
-        }
-        if (req.method === 'POST') {
-            const body = await parseBody(req);
-            const settings = readJson(SETTINGS_FILE, DEFAULT_SETTINGS);
-            const dir = body.dir || settings.downloadDir || DEFAULT_DOWNLOAD_DIR;
-            try {
-                const record = downloadManager.startNasDownload(body.url, body.filename, dir);
-                return sendJson(res, 201, record);
-            } catch (err) {
-                return sendJson(res, 400, { code: err.code || 'DOWNLOAD_ERROR', error: err.message });
-            }
-        }
-        if (req.method === 'DELETE') {
-            downloadManager.clearFinished();
-            return sendJson(res, 200, { ok: true });
-        }
-    }
-
-    if (pathname.startsWith('/api/downloads/')) {
-        const rest = pathname.slice('/api/downloads/'.length);
-        if (rest.endsWith('/cancel') && req.method === 'POST') {
-            const id = decodeURIComponent(rest.slice(0, -'/cancel'.length));
-            downloadManager.cancelDownload(id);
-            return sendJson(res, 200, { ok: true });
-        }
-        if (rest.endsWith('/file') && req.method === 'GET') {
-            const id = decodeURIComponent(rest.slice(0, -'/file'.length));
-            const item = downloadManager.findDownload(id);
-            if (!item || !item.filePath || !fs.existsSync(item.filePath)) {
-                return sendJson(res, 404, { error: '文件不存在或已被移动' });
-            }
-            const stat = fs.statSync(item.filePath);
-            res.writeHead(200, {
-                'Content-Type': 'application/octet-stream',
-                'Content-Length': stat.size,
-                'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(item.filename)}`
-            });
-            return fs.createReadStream(item.filePath).pipe(res);
-        }
-        if (req.method === 'DELETE') {
-            const id = decodeURIComponent(rest);
-            downloadManager.deleteDownload(id, parsedUrl.searchParams.get('deleteFile') === '1');
-            return sendJson(res, 200, { ok: true });
         }
     }
 
